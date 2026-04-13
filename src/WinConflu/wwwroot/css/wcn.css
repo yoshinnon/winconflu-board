@@ -1,0 +1,139 @@
+/* ============================================================
+   WinConflu.NET — wcn.css
+   Wiki 本文 / アノテーション / 差分 / 目次 / 検索ハイライト
+   ============================================================ */
+
+/* ── Wiki 本文 ────────────────────────────────────────────── */
+.wcn-page-body {
+    font-size: 14px;
+    line-height: 1.8;
+    color: var(--mud-palette-text-primary);
+}
+
+.wcn-page-body h1 { font-size: 22px; font-weight: 500; margin: 1.8rem 0 0.8rem; border-bottom: 1px solid var(--mud-palette-divider); padding-bottom: 6px; }
+.wcn-page-body h2 { font-size: 18px; font-weight: 500; margin: 1.5rem 0 0.6rem; border-bottom: 1px solid var(--mud-palette-divider); padding-bottom: 4px; }
+.wcn-page-body h3 { font-size: 15px; font-weight: 500; margin: 1.2rem 0 0.4rem; }
+.wcn-page-body h4 { font-size: 14px; font-weight: 500; margin: 1rem 0 0.3rem; }
+
+.wcn-page-body p  { margin-bottom: 0.9rem; }
+.wcn-page-body ul,
+.wcn-page-body ol { margin: 0.6rem 0 0.9rem 1.5rem; }
+.wcn-page-body li { margin-bottom: 0.25rem; }
+
+.wcn-page-body a  { color: #185FA5; text-decoration: none; }
+.wcn-page-body a:hover { text-decoration: underline; }
+
+.wcn-page-body blockquote {
+    border-left: 3px solid #B5D4F4;
+    margin: 1rem 0;
+    padding: 0.5rem 1rem;
+    background: #E6F1FB;
+    border-radius: 0 6px 6px 0;
+    color: #0C447C;
+    font-style: italic;
+}
+
+.wcn-page-body code {
+    font-family: var(--mud-font-family-monospace, monospace);
+    font-size: 12px;
+    background: var(--mud-palette-background-grey);
+    padding: 1px 5px;
+    border-radius: 4px;
+}
+
+.wcn-page-body pre.wcn-code {
+    background: #1E1E1E;
+    color: #D4D4D4;
+    padding: 14px 16px;
+    border-radius: 8px;
+    overflow-x: auto;
+    margin: 1rem 0;
+    font-size: 12px;
+    line-height: 1.6;
+}
+
+.wcn-page-body pre.wcn-code code { background: transparent; color: inherit; padding: 0; }
+
+.wcn-page-body table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 13px; }
+.wcn-page-body th { background: var(--mud-palette-background-grey); font-weight: 500; }
+.wcn-page-body th,
+.wcn-page-body td { padding: 8px 12px; border: 1px solid var(--mud-palette-divider); text-align: left; }
+.wcn-page-body tr:nth-child(even) td { background: var(--mud-palette-background); }
+
+/* タスクリスト */
+.wcn-page-body input[type="checkbox"] { margin-right: 6px; }
+
+/* ── 目次（ToC） ──────────────────────────────────────────── */
+.wcn-toc {
+    background: var(--mud-palette-background-grey);
+    border: 0.5px solid var(--mud-palette-divider);
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin: 1rem 0 1.5rem;
+    display: inline-block;
+    min-width: 200px;
+    max-width: 400px;
+}
+
+.wcn-toc-title {
+    font-size: 12px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--mud-palette-text-secondary);
+    margin-bottom: 8px;
+}
+
+.wcn-toc-list { margin: 0; padding-left: 18px; }
+.wcn-toc-list li { margin-bottom: 4px; font-size: 13px; }
+.wcn-toc-list a { color: #185FA5; text-decoration: none; }
+.wcn-toc-list a:hover { text-decoration: underline; }
+
+/* ── インラインアノテーション ─────────────────────────────── */
+.wcn-annotation-highlight {
+    background: rgba(251, 191, 36, 0.3);
+    border-bottom: 2px solid #F59E0B;
+    cursor: pointer;
+    border-radius: 2px;
+    transition: background 0.15s;
+    padding: 0 1px;
+}
+.wcn-annotation-highlight:hover        { background: rgba(251, 191, 36, 0.5); }
+.wcn-annotation-highlight.active       { background: rgba(251, 191, 36, 0.6); border-color: #D97706; }
+.wcn-annotation-highlight.resolved     { background: transparent; border-color: #9CA3AF; opacity: 0.5; }
+
+/* ── 検索ハイライト ───────────────────────────────────────── */
+.wcn-search-hit {
+    background: #FEF08A;
+    border-radius: 2px;
+    padding: 0 2px;
+    font-style: normal;
+    color: #1C1917;
+}
+
+/* ── コードブロック コピーボタン ─────────────────────────── */
+.wcn-copy-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    font-size: 11px;
+    padding: 2px 8px;
+    background: rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 4px;
+    cursor: pointer;
+    color: #D4D4D4;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+pre.wcn-code:hover .wcn-copy-btn { opacity: 1; }
+.wcn-copy-btn:hover { background: rgba(255,255,255,0.2); }
+
+/* ── ガントチャート ───────────────────────────────────────── */
+.wcn-gantt-bar {
+    transition: opacity 0.15s, transform 0.1s;
+}
+.wcn-gantt-bar:hover {
+    opacity: 0.85;
+    transform: scaleY(1.05);
+}

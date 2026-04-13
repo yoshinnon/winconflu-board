@@ -1,0 +1,259 @@
+@* WinConflu.NET — InlineAnnotationPanel.razor
+   ページ表示時の右サイドに展開するインラインコメントパネル *@
+
+@inject IInlineAnnotationService AnnotationSvc
+@inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthState
+
+@* 注釈ハイライト用 CSS（ページ本文に適用される） *@
+<style>
+    .wcn-annotation-highlight {
+        background: #FFF9C4;
+        border-bottom: 2px solid #F59E0B;
+        cursor: pointer;
+        border-radius: 2px;
+        transition: background 0.15s;
+    }
+    .wcn-annotation-highlight:hover { background: #FEF08A; }
+    .wcn-annotation-highlight.active { background: #FDE68A; border-color: #D97706; }
+    .wcn-annotation-highlight.resolved { background: transparent; border-color: #9CA3AF; opacity: 0.5; }
+</style>
+
+@* ── アノテーションサイドパネル ──────────────────────────── *@
+<div style="@(Visible ? "display:flex;flex-direction:column;gap:12px;" : "display:none")">
+
+    @* パネルヘッダー *@
+    <div class="d-flex align-center justify-space-between mb-1">
+        <MudText Typo="Typo.subtitle2">
+            コメント
+            @if (_open.Count > 0)
+            {
+                <MudBadge Content="@_open.Count" Color="Color.Warning" Overlap="true" Class="ml-2">
+                    <span></span>
+                </MudBadge>
+            }
+        </MudText>
+        <div class="d-flex gap-1">
+            <MudToggleIconButton @bind-Toggled="_showResolved"
+                                 Icon="@Icons.Material.Filled.VisibilityOff"
+                                 ToggledIcon="@Icons.Material.Filled.Visibility"
+                                 Size="Size.Small"
+                                 Title="@(_showResolved ? "解決済みを非表示" : "解決済みを表示")" />
+        </div>
+    </div>
+
+    @if (_loading)
+    {
+        <MudProgressLinear Indeterminate="true" Color="Color.Warning" />
+    }
+    else if (!_displayList.Any())
+    {
+        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="py-2">
+            コメントはありません。本文のテキストを選択してコメントを追加できます。
+        </MudText>
+    }
+    else
+    {
+        @foreach (var ann in _displayList)
+        {
+            <MudPaper Elevation="@(_activeAnnotationId == ann.Id ? 2 : 1)"
+                      Class="pa-3"
+                      Style="@AnnotationCardStyle(ann)"
+                      @onclick="() => SetActive(ann.Id)">
+
+                @* 引用テキスト *@
+                <div class="mb-2 pa-2 rounded"
+                     style="background:var(--mud-palette-background-grey);border-left:3px solid #F59E0B;font-size:12px;color:var(--mud-palette-text-secondary);font-style:italic">
+                    "@TruncateText(ann.SelectedText, 80)"
+                </div>
+
+                @* ステータスバッジ *@
+                @if (ann.Status != AnnotationStatus.Open)
+                {
+                    <MudChip Size="Size.Small"
+                             Color="@(ann.Status == AnnotationStatus.Resolved ? Color.Success : Color.Default)"
+                             Label="true" Class="mb-2">
+                        @(ann.Status == AnnotationStatus.Resolved ? "解決済み" : "無効")
+                    </MudChip>
+                }
+
+                @* 返信スレッド *@
+                @foreach (var reply in ann.Replies.Where(r => !r.IsDeleted))
+                {
+                    <div class="d-flex gap-2 mb-2">
+                        <MudAvatar Size="Size.Small" Color="Color.Primary"
+                                   Style="width:22px;height:22px;font-size:10px;flex-shrink:0;margin-top:2px">
+                            @reply.AuthorSid.FirstOrDefault()
+                        </MudAvatar>
+                        <div style="flex:1;min-width:0">
+                            <div class="d-flex align-center gap-1 mb-1">
+                                <MudText Typo="Typo.caption" Style="font-weight:500">
+                                    @reply.AuthorSid
+                                </MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    @reply.CreatedAt.ToString("M/d HH:mm")
+                                </MudText>
+                                @if (reply.AuthorSid == _currentUserSid)
+                                {
+                                    <MudIconButton Size="Size.Small"
+                                                   Icon="@Icons.Material.Filled.Delete"
+                                                   Color="Color.Default"
+                                                   Style="margin-left:auto"
+                                                   OnClick="() => DeleteReply(reply.Id)"
+                                                   @onclick:stopPropagation="true" />
+                                }
+                            </div>
+                            <MudText Typo="Typo.body2" Style="white-space:pre-wrap;word-break:break-word">
+                                @reply.Body
+                            </MudText>
+                        </div>
+                    </div>
+                }
+
+                @* アクティブなスレッドに返信入力欄を表示 *@
+                @if (_activeAnnotationId == ann.Id && ann.Status == AnnotationStatus.Open)
+                {
+                    <div class="d-flex gap-2 mt-2" @onclick:stopPropagation="true">
+                        <MudAvatar Size="Size.Small" Color="Color.Primary"
+                                   Style="width:22px;height:22px;font-size:10px;flex-shrink:0;margin-top:4px">
+                            @_currentUserSid.FirstOrDefault()
+                        </MudAvatar>
+                        <div style="flex:1">
+                            <MudTextField @bind-Value="_replyTexts[ann.Id]"
+                                          Placeholder="返信を入力... (Ctrl+Enter で送信)"
+                                          Variant="Variant.Outlined"
+                                          Margin="Margin.Dense"
+                                          Lines="2"
+                                          @onkeydown="e => OnReplyKeyDown(e, ann.Id)" />
+                            <div class="d-flex gap-1 mt-1 justify-end">
+                                <MudButton Size="Size.Small" Variant="Variant.Outlined"
+                                           OnClick="() => ResolveAnnotation(ann.Id)">
+                                    解決
+                                </MudButton>
+                                <MudButton Size="Size.Small" Variant="Variant.Filled"
+                                           Color="Color.Primary"
+                                           Disabled="@(string.IsNullOrWhiteSpace(GetReplyText(ann.Id)))"
+                                           OnClick="() => SubmitReply(ann.Id)">
+                                    返信
+                                </MudButton>
+                            </div>
+                        </div>
+                    </div>
+                }
+                else if (_activeAnnotationId == ann.Id && ann.Status == AnnotationStatus.Resolved)
+                {
+                    <MudButton Size="Size.Small" Variant="Variant.Outlined"
+                               Class="mt-1" FullWidth="true"
+                               OnClick="() => ResolveAnnotation(ann.Id)"
+                               @onclick:stopPropagation="true">
+                        解決を取り消す
+                    </MudButton>
+                }
+
+            </MudPaper>
+        }
+    }
+</div>
+
+@code {
+    [Parameter] public int     PageId  { get; set; }
+    [Parameter] public bool    Visible { get; set; } = true;
+
+    /// <summary>注釈が追加・解決されたときに WikiPage へ通知</summary>
+    [Parameter] public EventCallback<int> OnAnnotationCountChanged { get; set; }
+
+    private bool   _loading           = true;
+    private bool   _showResolved      = false;
+    private int?   _activeAnnotationId;
+    private string _currentUserSid    = string.Empty;
+
+    private List<InlineAnnotation> _annotations = [];
+    private List<InlineAnnotation> _open        = [];
+    private List<InlineAnnotation> _displayList = [];
+
+    private Dictionary<int, string> _replyTexts = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthState.GetAuthenticationStateAsync();
+        _currentUserSid = auth.User.Identity?.Name ?? string.Empty;
+        await LoadAsync();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!_loading) await LoadAsync();
+    }
+
+    public async Task LoadAsync()
+    {
+        _loading     = true;
+        _annotations = await AnnotationSvc.GetByPageAsync(PageId, includeResolved: true);
+        Refresh();
+        _loading = false;
+    }
+
+    private void Refresh()
+    {
+        _open        = _annotations.Where(a => a.Status == AnnotationStatus.Open).ToList();
+        _displayList = _showResolved
+            ? _annotations
+            : _annotations.Where(a => a.Status == AnnotationStatus.Open
+                                   || a.Status == AnnotationStatus.Outdated).ToList();
+    }
+
+    private void SetActive(int id)
+        => _activeAnnotationId = _activeAnnotationId == id ? null : id;
+
+    private async Task SubmitReply(int annotationId)
+    {
+        var text = GetReplyText(annotationId);
+        if (string.IsNullOrWhiteSpace(text)) return;
+
+        try
+        {
+            await AnnotationSvc.AddReplyAsync(annotationId, text, _currentUserSid);
+            _replyTexts[annotationId] = string.Empty;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"返信の送信に失敗: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task ResolveAnnotation(int annotationId)
+    {
+        await AnnotationSvc.ResolveAsync(annotationId, _currentUserSid);
+        await LoadAsync();
+        await OnAnnotationCountChanged.InvokeAsync(_open.Count);
+        Snackbar.Add("注釈のステータスを変更しました。", Severity.Success);
+    }
+
+    private async Task DeleteReply(int replyId)
+    {
+        await AnnotationSvc.DeleteReplyAsync(replyId, _currentUserSid);
+        await LoadAsync();
+    }
+
+    private async Task OnReplyKeyDown(KeyboardEventArgs e, int annotationId)
+    {
+        if (e.Key == "Enter" && e.CtrlKey)
+            await SubmitReply(annotationId);
+    }
+
+    private string GetReplyText(int id)
+        => _replyTexts.TryGetValue(id, out var t) ? t : string.Empty;
+
+    private static string TruncateText(string text, int max)
+        => text.Length <= max ? text : text[..max] + "…";
+
+    private string AnnotationCardStyle(InlineAnnotation ann)
+    {
+        var border = _activeAnnotationId == ann.Id
+            ? "border:1.5px solid #F59E0B"
+            : "border:0.5px solid var(--mud-palette-divider)";
+        var opacity = ann.Status == AnnotationStatus.Outdated ? ";opacity:0.6" : "";
+        return $"{border}{opacity}";
+    }
+}

@@ -1,0 +1,255 @@
+@* WinConflu.NET — SettingsPage.razor
+   管理者設定ページ（パフォーマンス監視 / インデックス管理） *@
+@page "/settings"
+@layout MainLayout
+@inject IPerformanceService PerfSvc
+@inject ITemplateService TemplateSvc
+@inject ISnackbar Snackbar
+@inject IConfiguration Config
+
+<PageTitle>設定 — WinConflu.NET</PageTitle>
+
+<MudText Typo="Typo.h5" Class="mb-4" Style="font-weight:500">設定</MudText>
+
+<MudTabs Elevation="1" Rounded="true" ApplyEffectsToContainer="true">
+
+    @* ── システム情報 ──────────────────────────────────────── *@
+    <MudTabPanel Text="システム" Icon="@Icons.Material.Filled.Dashboard">
+        <div class="pa-4">
+            @if (_summary == null)
+            {
+                <MudProgressLinear Indeterminate="true" />
+            }
+            else
+            {
+                <MudGrid Spacing="2">
+                    <MudItem xs="6" sm="4" md="2">
+                        <div style="background:var(--mud-palette-background-grey);border-radius:8px;padding:14px">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="display:block">Wiki ページ数</MudText>
+                            <MudText Typo="Typo.h5" Style="font-weight:500">@_summary.TotalPages.ToString("N0")</MudText>
+                        </div>
+                    </MudItem>
+                    <MudItem xs="6" sm="4" md="2">
+                        <div style="background:var(--mud-palette-background-grey);border-radius:8px;padding:14px">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="display:block">チケット数</MudText>
+                            <MudText Typo="Typo.h5" Style="font-weight:500">@_summary.TotalIssues.ToString("N0")</MudText>
+                        </div>
+                    </MudItem>
+                    <MudItem xs="6" sm="4" md="2">
+                        <div style="background:var(--mud-palette-background-grey);border-radius:8px;padding:14px">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="display:block">リビジョン数</MudText>
+                            <MudText Typo="Typo.h5" Style="font-weight:500">@_summary.TotalRevisions.ToString("N0")</MudText>
+                        </div>
+                    </MudItem>
+                    <MudItem xs="6" sm="4" md="2">
+                        <div style="background:var(--mud-palette-background-grey);border-radius:8px;padding:14px">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="display:block">注釈数</MudText>
+                            <MudText Typo="Typo.h5" Style="font-weight:500">@_summary.TotalAnnotations.ToString("N0")</MudText>
+                        </div>
+                    </MudItem>
+                    <MudItem xs="6" sm="4" md="2">
+                        <div style="background:var(--mud-palette-background-grey);border-radius:8px;padding:14px">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="display:block">未読通知数</MudText>
+                            <MudText Typo="Typo.h5" Style="font-weight:500">@_summary.TotalNotifications.ToString("N0")</MudText>
+                        </div>
+                    </MudItem>
+                </MudGrid>
+
+                <MudDivider Class="my-4" />
+
+                @* 接続文字列・設定値 *@
+                <MudText Typo="Typo.subtitle2" Class="mb-2">設定値</MudText>
+                <MudTable Dense="true" Items="_configItems" Hover="true" Elevation="0">
+                    <HeaderContent>
+                        <MudTh>項目</MudTh><MudTh>値</MudTh>
+                    </HeaderContent>
+                    <RowTemplate Context="item">
+                        <MudTd>@item.Key</MudTd>
+                        <MudTd Style="font-family:monospace;font-size:12px">@item.Value</MudTd>
+                    </RowTemplate>
+                </MudTable>
+            }
+        </div>
+    </MudTabPanel>
+
+    @* ── インデックス管理 ──────────────────────────────────── *@
+    <MudTabPanel Text="インデックス" Icon="@Icons.Material.Filled.Storage">
+        <div class="pa-4">
+            <div class="d-flex align-center gap-2 mb-3">
+                <MudButton Variant="Variant.Outlined"
+                           StartIcon="@Icons.Material.Filled.Refresh"
+                           OnClick="LoadIndexInfo">更新</MudButton>
+                <MudButton Variant="Variant.Filled" Color="Color.Warning"
+                           StartIcon="@Icons.Material.Filled.Build"
+                           OnClick="RebuildIndexes"
+                           Disabled="_rebuildRunning">
+                    @if (_rebuildRunning)
+                    {
+                        <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                        <span>再構築中...</span>
+                    }
+                    else
+                    {
+                        <span>断片化インデックスを再構築</span>
+                    }
+                </MudButton>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    閾値: 30% 以上で REBUILD、5〜30% は REORGANIZE
+                </MudText>
+            </div>
+
+            @if (_indexes != null)
+            {
+                <MudTable Dense="true" Items="_indexes" Hover="true" Elevation="1"
+                          SortLabel="ソート">
+                    <HeaderContent>
+                        <MudTh><MudTableSortLabel SortBy="new Func<IndexUsageInfo,object>(x=>x.TableName)">テーブル</MudTableSortLabel></MudTh>
+                        <MudTh>インデックス</MudTh>
+                        <MudTh><MudTableSortLabel SortBy="new Func<IndexUsageInfo,object>(x=>x.FragmentationPct)" InitialDirection="SortDirection.Descending">断片化率</MudTableSortLabel></MudTh>
+                        <MudTh>Seeks</MudTh>
+                        <MudTh>Scans</MudTh>
+                        <MudTh>状態</MudTh>
+                    </HeaderContent>
+                    <RowTemplate Context="idx">
+                        <MudTd>@idx.TableName</MudTd>
+                        <MudTd Style="font-size:12px;font-family:monospace">@idx.IndexName</MudTd>
+                        <MudTd>
+                            <MudText Color="@(idx.FragmentationPct >= 30 ? Color.Error : idx.FragmentationPct >= 10 ? Color.Warning : Color.Default)">
+                                @idx.FragmentationPct.ToString("F1")%
+                            </MudText>
+                        </MudTd>
+                        <MudTd>@idx.UserSeeks.ToString("N0")</MudTd>
+                        <MudTd>@idx.UserScans.ToString("N0")</MudTd>
+                        <MudTd>
+                            @if (idx.NeedsRebuild)
+                            {
+                                <MudChip Size="Size.Small" Color="Color.Error" Label="true">要再構築</MudChip>
+                            }
+                            else
+                            {
+                                <MudChip Size="Size.Small" Color="Color.Success" Label="true">正常</MudChip>
+                            }
+                        </MudTd>
+                    </RowTemplate>
+                </MudTable>
+            }
+        </div>
+    </MudTabPanel>
+
+    @* ── テンプレート管理 ──────────────────────────────────── *@
+    <MudTabPanel Text="テンプレート" Icon="@Icons.Material.Filled.ContentCopy">
+        <div class="pa-4">
+            @if (_templates != null)
+            {
+                <MudTable Dense="true" Items="_templates" Hover="true" Elevation="1">
+                    <HeaderContent>
+                        <MudTh>名前</MudTh><MudTh>カテゴリ</MudTh><MudTh>使用回数</MudTh><MudTh>種別</MudTh>
+                    </HeaderContent>
+                    <RowTemplate Context="tmpl">
+                        <MudTd>
+                            <div class="d-flex align-center gap-2">
+                                <MudIcon Icon="@tmpl.IconName" Size="Size.Small" Color="Color.Primary" />
+                                @tmpl.Name
+                            </div>
+                        </MudTd>
+                        <MudTd>@tmpl.Category</MudTd>
+                        <MudTd>@tmpl.UsageCount</MudTd>
+                        <MudTd>
+                            @if (tmpl.IsBuiltIn)
+                            {
+                                <MudChip Size="Size.Small" Color="Color.Info" Label="true">組み込み</MudChip>
+                            }
+                            else
+                            {
+                                <MudChip Size="Size.Small" Color="Color.Default" Label="true">カスタム</MudChip>
+                            }
+                        </MudTd>
+                    </RowTemplate>
+                </MudTable>
+            }
+        </div>
+    </MudTabPanel>
+
+    @* ── M365 連携設定 ─────────────────────────────────────── *@
+    <MudTabPanel Text="M365 連携" Icon="@Icons.Material.Filled.Cloud">
+        <div class="pa-4">
+            <MudSimpleTable Dense="true" Style="max-width:600px">
+                <tbody>
+                    @foreach (var item in _m365Settings)
+                    {
+                        <tr>
+                            <td style="font-size:13px;padding:10px 14px;color:var(--mud-palette-text-secondary)">@item.Key</td>
+                            <td style="font-size:12px;padding:10px 14px;font-family:monospace">@item.Value</td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        </div>
+    </MudTabPanel>
+
+</MudTabs>
+
+@code {
+    private PerformanceSummary?  _summary;
+    private List<IndexUsageInfo>? _indexes;
+    private List<PageTemplate>?  _templates;
+    private bool _rebuildRunning = false;
+
+    private List<(string Key, string Value)> _configItems    = [];
+    private List<(string Key, string Value)> _m365Settings   = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _summary   = await PerfSvc.GetSummaryAsync();
+        _templates = await TemplateSvc.GetAllAsync();
+        await LoadIndexInfo();
+        BuildConfigItems();
+    }
+
+    private async Task LoadIndexInfo()
+    {
+        _indexes = await PerfSvc.GetIndexUsageAsync();
+    }
+
+    private async Task RebuildIndexes()
+    {
+        _rebuildRunning = true;
+        try
+        {
+            await PerfSvc.RebuildFragmentedIndexesAsync(thresholdPct: 30);
+            await LoadIndexInfo();
+            Snackbar.Add("インデックスの再構築が完了しました。", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"再構築失敗: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _rebuildRunning = false;
+        }
+    }
+
+    private void BuildConfigItems()
+    {
+        _configItems =
+        [
+            ("認証方式",         "Windows 統合認証 (Negotiate/Kerberos)"),
+            ("データベース",     "Azure SQL Database"),
+            ("ストレージ",       Config["Storage:BlobEndpoint"] ?? "未設定"),
+            ("Key Vault",        Config["KeyVaultUri"] ?? "未設定（開発環境）"),
+            ("ADグループ TTL",   $"{Config.GetValue("AdGroup:CacheDurationSeconds", 300)} 秒"),
+            (".NET バージョン",  System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription),
+            ("サーバー",         System.Environment.MachineName),
+        ];
+
+        _m365Settings =
+        [
+            ("Graph API スコープ",    string.Join(", ", Config.GetSection("Graph:Scopes").Get<string[]>() ?? ["未設定"])),
+            ("SignalR 接続文字列",    string.IsNullOrEmpty(Config["Azure:SignalR:ConnectionString"]) ? "未設定（開発環境）" : "設定済み"),
+            ("Teams プレゼンス",      "有効（30秒キャッシュ）"),
+            ("Outlook 予定表同期",    "有効（期限付きチケット）"),
+            ("OneDrive 添付ファイル", "Blob Storage 経由"),
+        ];
+    }
+}

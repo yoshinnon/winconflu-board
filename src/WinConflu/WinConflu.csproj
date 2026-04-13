@@ -1,0 +1,73 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>WinConflu</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Blazor Server -->
+    <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.*" />
+    <!-- EF Core + SQL Server + HierarchyId -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer"         Version="10.*" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer.HierarchyId" Version="6.*" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Tools"             Version="10.*" PrivateAssets="all" />
+
+    <!-- Azure Managed Identity / Key Vault -->
+    <PackageReference Include="Azure.Identity"                Version="1.*" />
+    <PackageReference Include="Azure.Security.KeyVault.Secrets" Version="4.*" />
+    <PackageReference Include="Azure.Storage.Blobs"           Version="12.*" />
+
+    <!-- SignalR Service（スケールアウト用） -->
+    <PackageReference Include="Microsoft.Azure.SignalR"       Version="1.*" />
+
+    <!-- Microsoft Graph（Teams / Outlook / OneDrive 連携） -->
+    <PackageReference Include="Microsoft.Graph"               Version="5.*" />
+
+    <!-- MudBlazor 9.x（.NET 10 フルサポート） -->
+    <PackageReference Include="MudBlazor"                     Version="9.*" />
+
+    <!-- Application Insights -->
+    <PackageReference Include="Microsoft.ApplicationInsights.AspNetCore" Version="2.*" />
+
+    <!-- ヘルスチェック -->
+    <PackageReference Include="Microsoft.AspNetCore.Diagnostics.HealthChecks" Version="10.*" />
+    <PackageReference Include="AspNetCore.HealthChecks.SqlServer"             Version="9.*" />
+    <PackageReference Include="AspNetCore.HealthChecks.AzureBlobStorage"      Version="9.*" />
+
+    <!-- Markdown レンダリング -->
+    <PackageReference Include="Markdig"                  Version="0.*" />
+
+    <!-- バージョン差分表示 -->
+    <PackageReference Include="DiffPlex"                 Version="1.*" />
+
+    <!-- バックグラウンドジョブ（通知エンジン） -->
+    <PackageReference Include="Hangfire.AspNetCore"      Version="1.*" />
+    <PackageReference Include="Hangfire.SqlServer"       Version="1.*" />
+
+  </ItemGroup>
+
+  <!-- ── Tiptap エディタ TypeScript ビルド ────────────────────── -->
+  <!-- npm run build は wwwroot/editor/ で実行し、dist/ に出力する -->
+  <Target Name="BuildTiptapEditor" BeforeTargets="Build"
+          Condition="Exists('$(MSBuildProjectDirectory)/wwwroot/editor/package.json')">
+
+    <!-- 初回のみ npm install を実行（node_modules がなければ） -->
+    <Message Text="Tiptap: npm install を確認中..." Importance="normal" />
+    <Exec Command="npm install"
+          WorkingDirectory="$(MSBuildProjectDirectory)/wwwroot/editor"
+          Condition="!Exists('$(MSBuildProjectDirectory)/wwwroot/editor/node_modules')"
+          ConsoleToMSBuild="true" />
+
+    <!-- TypeScript をビルドして wwwroot/dist/ に出力 -->
+    <Message Text="Tiptap: TypeScript をビルド中..." Importance="normal" />
+    <Exec Command="npm run build"
+          WorkingDirectory="$(MSBuildProjectDirectory)/wwwroot/editor"
+          ConsoleToMSBuild="true" />
+
+    <Message Text="Tiptap: ビルド完了 → wwwroot/dist/wcn-editor.iife.js" Importance="high" />
+  </Target>
+
+</Project>

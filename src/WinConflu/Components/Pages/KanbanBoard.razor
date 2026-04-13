@@ -1,0 +1,654 @@
+@* WinConflu.NET — KanbanBoard.razor (IssueType / ワークフロー / エピック対応版) *@
+@page "/boards/{ProjectId:int}"
+@layout MainLayout
+@inject IBoardService BoardSvc
+@inject IWorkflowService WorkflowSvc
+@inject ISnackbar Snackbar
+@inject IDialogService Dialog
+@inject AuthenticationStateProvider AuthState
+@inject NavigationManager Nav
+
+<PageTitle>@(_project?.Name ?? "ボード") — WinConflu.NET</PageTitle>
+
+@if (_loading)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+}
+else if (_project is not null)
+{
+    @* ── ボードヘッダー ──────────────────────────────────── *@
+    <div class="d-flex align-center gap-3 mb-3 flex-wrap">
+        <MudText Typo="Typo.h5" Style="font-weight:500">@_project.Name</MudText>
+        <MudChip Size="Size.Small" Color="Color.Default" Label="true">@_project.Prefix</MudChip>
+        <MudSpacer />
+
+        @* ビュー切替 *@
+        <MudButtonGroup Variant="Variant.Outlined" Size="Size.Small">
+            <MudButton StartIcon="@Icons.Material.Filled.ViewKanban"
+                       Color="@(_view == BoardView.Kanban ? Color.Primary : Color.Default)"
+                       OnClick="() => _view = BoardView.Kanban">カンバン</MudButton>
+            <MudButton StartIcon="@Icons.Material.Filled.AccountTree"
+                       Color="@(_view == BoardView.Epic ? Color.Primary : Color.Default)"
+                       OnClick="() => { _view = BoardView.Epic; _ = LoadEpicsAsync(); }">エピック</MudButton>
+        </MudButtonGroup>
+
+        @* タイプフィルタ *@
+        <MudSelect T="IssueType?" @bind-Value="_filterType"
+                   Label="タイプ" Variant="Variant.Outlined"
+                   Margin="Margin.Dense" Style="min-width:120px"
+                   Clearable="true" AnchorOrigin="Origin.BottomLeft">
+            @foreach (IssueType t in Enum.GetValues<IssueType>())
+            {
+                <MudSelectItem T="IssueType?" Value="@((IssueType?)t)">
+                    <div class="d-flex align-center gap-2">
+                        <MudIcon Icon="@IssueTypeIcon(t)" Size="Size.Small" Color="@IssueTypeColor(t)" />
+                        @t
+                    </div>
+                </MudSelectItem>
+            }
+        </MudSelect>
+
+        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.Add"
+                   OnClick="() => OpenCreateIssue(null)">
+            チケット作成
+        </MudButton>
+    </div>
+
+    @* ── カンバンビュー ──────────────────────────────────── *@
+    @if (_view == BoardView.Kanban)
+    {
+        <div class="d-flex gap-3 overflow-x-auto pb-4" style="min-height:580px;align-items:flex-start">
+            @foreach (var col in _columns)
+            {
+                <div style="min-width:260px;max-width:290px;flex:1">
+                    <div class="d-flex align-center justify-space-between pa-2 rounded mb-2"
+                         style="@ColumnHeaderStyle(col.Status)">
+                        <MudText Typo="Typo.caption" Style="font-weight:600;letter-spacing:0.5px;text-transform:uppercase">
+                            @col.Label
+                        </MudText>
+                        <MudChip Size="Size.Small" Color="Color.Default" Label="true">
+                            @col.Issues.Count
+                        </MudChip>
+                    </div>
+
+                    @foreach (var issue in col.Issues.Where(FilterByType))
+                    {
+                        <MudPaper Elevation="1" Class="pa-3 mb-2 cursor-pointer"
+                                  @onclick="() => OpenIssueDetail(issue.Id)"
+                                  Style="border-radius:8px;border:0.5px solid var(--mud-palette-divider)">
+
+                            @* タイプ + ID + 優先度 *@
+                            <div class="d-flex align-center gap-1 mb-1">
+                                <MudTooltip Text="@issue.Type.ToString()">
+                                    <MudIcon Icon="@IssueTypeIcon(issue.Type)"
+                                             Size="Size.Small"
+                                             Color="@IssueTypeColor(issue.Type)"
+                                             Style="font-size:14px" />
+                                </MudTooltip>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary"
+                                         Style="font-family:monospace">
+                                    @_project.Prefix-@issue.IssueNumber
+                                </MudText>
+                                <MudIcon Icon="@Icons.Material.Filled.Circle"
+                                         Size="Size.Small"
+                                         Color="@PriorityColor(issue.Priority)"
+                                         Style="font-size:7px;margin-left:2px" />
+                                <MudSpacer />
+
+                                @* ブロッカーバッジ *@
+                                @if (issue.BlockedBy.Any())
+                                {
+                                    <MudTooltip Text="@($"{issue.BlockedBy.Count} 件のブロッカーあり")">
+                                        <MudIcon Icon="@Icons.Material.Filled.Block"
+                                                 Size="Size.Small" Color="Color.Error"
+                                                 Style="font-size:13px" />
+                                    </MudTooltip>
+                                }
+                                @* Wiki リンクバッジ *@
+                                @if (issue.LinkedPages.Any())
+                                {
+                                    <MudIcon Icon="@Icons.Material.Filled.Article"
+                                             Size="Size.Small" Color="Color.Primary"
+                                             Style="font-size:13px" />
+                                }
+                            </div>
+
+                            <MudText Typo="Typo.body2" Class="mb-2">@issue.Title</MudText>
+
+                            @* サブタスク進捗 *@
+                            @if (issue.SubIssues.Any())
+                            {
+                                var done   = issue.SubIssues.Count(s => s.Status == IssueStatus.Done || s.Status == IssueStatus.Verified);
+                                var total  = issue.SubIssues.Count;
+                                var pct    = (int)Math.Round(done * 100.0 / total);
+                                <div class="mb-2">
+                                    <div class="d-flex justify-space-between mb-1">
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                            サブタスク @done/@total
+                                        </MudText>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">@pct%</MudText>
+                                    </div>
+                                    <MudProgressLinear Value="@pct" Color="Color.Success"
+                                                       Rounded="true" Size="Size.Small" />
+                                </div>
+                            }
+
+                            <div class="d-flex align-center justify-space-between">
+                                <MudAvatar Size="Size.Small"
+                                           Color="@(string.IsNullOrEmpty(issue.AssigneeSid) ? Color.Default : Color.Primary)"
+                                           Style="width:22px;height:22px;font-size:10px">
+                                    @(string.IsNullOrEmpty(issue.AssigneeSid)
+                                        ? "?"
+                                        : issue.AssigneeSid.FirstOrDefault().ToString())
+                                </MudAvatar>
+                                @if (issue.DueDate.HasValue)
+                                {
+                                    var overdue = issue.DueDate < DateTimeOffset.UtcNow
+                                                  && issue.Status != IssueStatus.Done
+                                                  && issue.Status != IssueStatus.Verified;
+                                    <MudText Typo="Typo.caption"
+                                             Color="@(overdue ? Color.Error : Color.Secondary)">
+                                        @issue.DueDate.Value.ToString("M/d")
+                                        @if (overdue){<span> !</span>}
+                                    </MudText>
+                                }
+                            </div>
+
+                            @* ワークフロー対応の移動ボタン *@
+                            <div class="d-flex gap-1 mt-2" @onclick:stopPropagation="true">
+                                @{
+                                    var allowed = _allowedTransitions.GetValueOrDefault(issue.Id, []);
+                                }
+                                @foreach (var next in allowed)
+                                {
+                                    <MudChip Size="Size.Small"
+                                             Color="@StatusChipColor(next)"
+                                             Label="true"
+                                             OnClick="() => MoveIssueWithCheck(issue, next)"
+                                             Style="cursor:pointer;font-size:10px">
+                                        → @StatusLabel(next)
+                                    </MudChip>
+                                }
+                            </div>
+                        </MudPaper>
+                    }
+
+                    <MudButton Variant="Variant.Text" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Add"
+                               FullWidth="true" Color="Color.Default"
+                               OnClick="() => OpenCreateIssue(col.Status)">
+                        追加
+                    </MudButton>
+                </div>
+            }
+        </div>
+    }
+
+    @* ── エピックビュー ──────────────────────────────────── *@
+    @if (_view == BoardView.Epic)
+    {
+        @if (_epics.Any())
+        {
+            @foreach (var epic in _epics)
+            {
+                var epicProgress = epic.SubIssues.Any()
+                    ? (int)Math.Round(epic.SubIssues.Count(s => s.Status is IssueStatus.Done or IssueStatus.Verified) * 100.0 / epic.SubIssues.Count)
+                    : 0;
+
+                <MudExpansionPanel Class="mb-2">
+                    <TitleContent>
+                        <div class="d-flex align-center gap-3 w-100">
+                            <MudIcon Icon="@IssueTypeIcon(IssueType.Epic)"
+                                     Color="@IssueTypeColor(IssueType.Epic)" />
+                            <MudText Typo="Typo.body1" Style="font-weight:500">@epic.Title</MudText>
+                            <MudChip Size="Size.Small" Color="Color.Default" Label="true">
+                                @_project.Prefix-@epic.IssueNumber
+                            </MudChip>
+                            <MudSpacer />
+                            <div style="min-width:120px">
+                                <MudProgressLinear Value="@epicProgress" Color="Color.Primary"
+                                                   Rounded="true" Size="Size.Small" />
+                            </div>
+                            <MudText Typo="Typo.caption" Style="min-width:36px;text-align:right">
+                                @epicProgress%
+                            </MudText>
+                        </div>
+                    </TitleContent>
+                    <ChildContent>
+                        <MudTable Items="epic.SubIssues.Where(s => !s.IsDeleted)"
+                                  Dense="true" Hover="true" Elevation="0">
+                            <HeaderContent>
+                                <MudTh></MudTh>
+                                <MudTh>チケット</MudTh>
+                                <MudTh>タイトル</MudTh>
+                                <MudTh>担当</MudTh>
+                                <MudTh>ステータス</MudTh>
+                                <MudTh>期限</MudTh>
+                            </HeaderContent>
+                            <RowTemplate Context="sub">
+                                <MudTd>
+                                    <MudIcon Icon="@IssueTypeIcon(sub.Type)"
+                                             Size="Size.Small"
+                                             Color="@IssueTypeColor(sub.Type)" />
+                                </MudTd>
+                                <MudTd>
+                                    <MudText Typo="Typo.caption" Style="font-family:monospace">
+                                        @_project.Prefix-@sub.IssueNumber
+                                    </MudText>
+                                </MudTd>
+                                <MudTd>
+                                    <MudLink OnClick="() => OpenIssueDetail(sub.Id)">@sub.Title</MudLink>
+                                </MudTd>
+                                <MudTd>@(sub.AssigneeSid ?? "—")</MudTd>
+                                <MudTd>
+                                    <MudChip Size="Size.Small" Label="true"
+                                             Color="@StatusChipColor(sub.Status)">
+                                        @StatusLabel(sub.Status)
+                                    </MudChip>
+                                </MudTd>
+                                <MudTd>
+                                    @if (sub.DueDate.HasValue)
+                                    {
+                                        var ov = sub.DueDate < DateTimeOffset.UtcNow
+                                                 && sub.Status != IssueStatus.Done
+                                                 && sub.Status != IssueStatus.Verified;
+                                        <MudText Typo="Typo.caption" Color="@(ov ? Color.Error : Color.Secondary)">
+                                            @sub.DueDate.Value.ToString("M/d")
+                                        </MudText>
+                                    }
+                                </MudTd>
+                            </RowTemplate>
+                        </MudTable>
+                        <MudButton Variant="Variant.Text" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Add"
+                                   OnClick="() => OpenCreateSubIssue(epic.Id)">
+                            サブタスクを追加
+                        </MudButton>
+                    </ChildContent>
+                </MudExpansionPanel>
+            }
+        }
+        else
+        {
+            <MudText Typo="Typo.body2" Color="Color.Secondary">
+                エピックがありません。「チケット作成」からタイプ「Epic」を選択して作成してください。
+            </MudText>
+        }
+    }
+}
+
+@* ── チケット作成/編集ダイアログ ────────────────────────── *@
+<MudDialog @bind-IsVisible="_showCreateDialog"
+           Options="@(new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true })">
+    <TitleContent>
+        <div class="d-flex align-center gap-2">
+            @if (_form.Type != IssueType.Task)
+            {
+                <MudIcon Icon="@IssueTypeIcon(_form.Type)" Color="@IssueTypeColor(_form.Type)" />
+            }
+            <MudText Typo="Typo.h6">
+                @(_editingIssue is null ? "チケット作成" : $"編集: {_project?.Prefix}-{_editingIssue.IssueNumber}")
+            </MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <MudGrid Spacing="2">
+            <MudItem xs="12" sm="4">
+                <MudSelect @bind-Value="_form.Type" Label="タイプ" Variant="Variant.Outlined">
+                    @foreach (IssueType t in Enum.GetValues<IssueType>())
+                    {
+                        <MudSelectItem Value="@t">
+                            <div class="d-flex align-center gap-2">
+                                <MudIcon Icon="@IssueTypeIcon(t)" Size="Size.Small" Color="@IssueTypeColor(t)" />
+                                @t
+                            </div>
+                        </MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" sm="4">
+                <MudSelect @bind-Value="_form.Priority" Label="優先度" Variant="Variant.Outlined">
+                    @foreach (IssuePriority p in Enum.GetValues<IssuePriority>())
+                    {
+                        <MudSelectItem Value="@p">@p</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" sm="4">
+                <MudDatePicker @bind-Date="_form.DueDateNullable" Label="期限" Variant="Variant.Outlined" />
+            </MudItem>
+            <MudItem xs="12">
+                <MudTextField @bind-Value="_form.Title" Label="タイトル"
+                              Variant="Variant.Outlined" Required="true" FullWidth="true" />
+            </MudItem>
+            <MudItem xs="12">
+                <MudTextField @bind-Value="_form.Description" Label="説明"
+                              Variant="Variant.Outlined" Lines="4" FullWidth="true"
+                              Placeholder="Markdown 記法が使用できます" />
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudTextField @bind-Value="_form.AssigneeSid" Label="担当者 (AD アカウント)"
+                              Variant="Variant.Outlined" />
+            </MudItem>
+            @if (_form.Type != IssueType.Epic)
+            {
+                <MudItem xs="12" sm="6">
+                    <MudTextField @bind-Value="_form.ParentIssueNumberStr"
+                                  Label="親チケット番号 (省略可)"
+                                  Variant="Variant.Outlined"
+                                  Placeholder="例: 5 (@_project?.Prefix-5)" />
+                </MudItem>
+            }
+
+            @* ワークフローコメント（必須遷移時） *@
+            @if (_requireComment)
+            {
+                <MudItem xs="12">
+                    <MudTextField @bind-Value="_form.WorkflowComment"
+                                  Label="遷移理由（必須）"
+                                  Variant="Variant.Outlined" Lines="2" FullWidth="true"
+                                  Required="true" />
+                </MudItem>
+            }
+        </MudGrid>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="() => _showCreateDialog = false">キャンセル</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveIssue">
+            @(_editingIssue is null ? "作成" : "保存")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@* ── ステータス遷移コメントダイアログ ───────────────────── *@
+<MudDialog @bind-IsVisible="_showMoveDialog"
+           Options="@(new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true })">
+    <TitleContent>
+        <MudText Typo="Typo.h6">
+            ステータスを変更 → @StatusLabel(_pendingStatus)
+        </MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
+            このステータス遷移にはコメントが必要です。
+        </MudText>
+        <MudTextField @bind-Value="_moveComment" Label="コメント（必須）"
+                      Variant="Variant.Outlined" Lines="3" FullWidth="true"
+                      AutoFocus="true" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="() => _showMoveDialog = false">キャンセル</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                   Disabled="@string.IsNullOrWhiteSpace(_moveComment)"
+                   OnClick="ConfirmMove">確認して移動</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [Parameter] public int ProjectId { get; set; }
+
+    private bool         _loading         = true;
+    private bool         _showCreateDialog = false;
+    private bool         _showMoveDialog  = false;
+    private bool         _requireComment  = false;
+    private BoardView    _view            = BoardView.Kanban;
+    private IssueType?   _filterType;
+    private string       _currentUserSid  = string.Empty;
+    private string       _moveComment     = string.Empty;
+    private IssueStatus  _pendingStatus;
+    private Issue?       _pendingIssue;
+
+    private WinConflu.Models.Project? _project;
+    private WinConflu.Models.Issue?   _editingIssue;
+    private IssueFormModel            _form = new();
+    private List<KanbanColumn>        _columns = [];
+    private List<WinConflu.Models.Issue> _epics = [];
+
+    // issueId → 許可されているステータス一覧
+    private Dictionary<int, List<IssueStatus>> _allowedTransitions = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthState.GetAuthenticationStateAsync();
+        _currentUserSid = auth.User.Identity?.Name ?? string.Empty;
+        await LoadBoardAsync();
+    }
+
+    private async Task LoadBoardAsync()
+    {
+        _loading = true;
+        try
+        {
+            _project = await BoardSvc.GetProjectAsync(ProjectId);
+            var issues = await BoardSvc.GetIssuesAsync(ProjectId);
+
+            _columns =
+            [
+                new(IssueStatus.Todo,     "Todo",     issues.Where(i => i.Status == IssueStatus.Todo).ToList()),
+                new(IssueStatus.Doing,    "Doing",    issues.Where(i => i.Status == IssueStatus.Doing).ToList()),
+                new(IssueStatus.Done,     "Done",     issues.Where(i => i.Status == IssueStatus.Done).ToList()),
+                new(IssueStatus.Verified, "Verified", issues.Where(i => i.Status == IssueStatus.Verified).ToList()),
+            ];
+
+            // 各チケットの許可遷移を事前取得
+            _allowedTransitions = [];
+            foreach (var issue in issues)
+            {
+                var allowed = await BoardSvc.GetAllowedStatusesAsync(issue.Id, _currentUserSid);
+                _allowedTransitions[issue.Id] = allowed;
+            }
+        }
+        finally { _loading = false; }
+    }
+
+    private async Task LoadEpicsAsync()
+    {
+        _epics = await BoardSvc.GetEpicsAsync(ProjectId);
+    }
+
+    // ── 移動 ─────────────────────────────────────────────────
+
+    private async Task MoveIssueWithCheck(WinConflu.Models.Issue issue, IssueStatus next)
+    {
+        // ワークフロー定義でコメント必須か確認
+        var wf = await WorkflowSvc.GetDefaultAsync(ProjectId);
+        var transition = wf?.Transitions
+            .FirstOrDefault(t => t.FromStatus == issue.Status && t.ToStatus == next);
+
+        if (transition?.RequireComment == true)
+        {
+            _pendingIssue  = issue;
+            _pendingStatus = next;
+            _moveComment   = string.Empty;
+            _showMoveDialog = true;
+            return;
+        }
+
+        await ExecuteMove(issue, next, null);
+    }
+
+    private async Task ConfirmMove()
+    {
+        if (_pendingIssue == null) return;
+        await ExecuteMove(_pendingIssue, _pendingStatus, _moveComment);
+        _showMoveDialog = false;
+    }
+
+    private async Task ExecuteMove(WinConflu.Models.Issue issue, IssueStatus next, string? comment)
+    {
+        try
+        {
+            await BoardSvc.MoveIssueAsync(issue.Id, next, _currentUserSid, comment);
+            Snackbar.Add($"{issue.Title} → {StatusLabel(next)}", Severity.Success);
+            await LoadBoardAsync();
+        }
+        catch (WorkflowViolationException ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Warning);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"移動に失敗: {ex.Message}", Severity.Error);
+        }
+    }
+
+    // ── 作成/編集 ─────────────────────────────────────────────
+
+    private void OpenCreateIssue(IssueStatus? defaultStatus)
+    {
+        _editingIssue = null;
+        _form = new IssueFormModel
+        {
+            Status = defaultStatus ?? IssueStatus.Todo
+        };
+        _showCreateDialog = true;
+    }
+
+    private void OpenCreateSubIssue(int epicId)
+    {
+        _editingIssue = null;
+        _form = new IssueFormModel
+        {
+            Type = IssueType.Story,
+            ParentIssueNumberStr = epicId.ToString()
+        };
+        _showCreateDialog = true;
+    }
+
+    private void OpenIssueDetail(int issueId)
+        => Nav.NavigateTo($"/boards/issue/{issueId}");
+
+    private async Task SaveIssue()
+    {
+        if (string.IsNullOrWhiteSpace(_form.Title))
+        {
+            Snackbar.Add("タイトルを入力してください。", Severity.Warning);
+            return;
+        }
+
+        try
+        {
+            int? parentId = null;
+            if (!string.IsNullOrWhiteSpace(_form.ParentIssueNumberStr)
+                && int.TryParse(_form.ParentIssueNumberStr, out var parentNum))
+            {
+                var parent = await Task.FromResult(
+                    _columns.SelectMany(c => c.Issues)
+                             .FirstOrDefault(i => i.IssueNumber == parentNum));
+                parentId = parent?.Id;
+            }
+
+            if (_editingIssue is null)
+            {
+                var req = new CreateIssueRequest(
+                    ProjectId, _form.Title, _form.Description,
+                    _form.Type, _form.Priority, _form.AssigneeSid,
+                    _form.DueDateNullable.HasValue
+                        ? new DateTimeOffset(_form.DueDateNullable.Value, TimeSpan.Zero)
+                        : null,
+                    parentId, null);
+                await BoardSvc.CreateIssueAsync(req, _currentUserSid);
+                Snackbar.Add("チケットを作成しました。", Severity.Success);
+            }
+            else
+            {
+                var req = new UpdateIssueRequest(
+                    _form.Title, _form.Description,
+                    _form.Type, _form.Priority, _form.AssigneeSid,
+                    _form.DueDateNullable.HasValue
+                        ? new DateTimeOffset(_form.DueDateNullable.Value, TimeSpan.Zero)
+                        : null,
+                    parentId);
+                await BoardSvc.UpdateIssueAsync(_editingIssue.Id, req, _currentUserSid);
+                Snackbar.Add("チケットを更新しました。", Severity.Success);
+            }
+
+            _showCreateDialog = false;
+            await LoadBoardAsync();
+        }
+        catch (Exception ex) { Snackbar.Add($"保存に失敗: {ex.Message}", Severity.Error); }
+    }
+
+    // ── フィルタ ──────────────────────────────────────────────
+
+    private bool FilterByType(WinConflu.Models.Issue i)
+        => _filterType == null || i.Type == _filterType;
+
+    // ── スタイル・ヘルパー ─────────────────────────────────────
+
+    private static string ColumnHeaderStyle(IssueStatus s) => s switch
+    {
+        IssueStatus.Todo     => "background:#F1EFE8;color:#444441",
+        IssueStatus.Doing    => "background:#FAEEDA;color:#633806",
+        IssueStatus.Done     => "background:#EAF3DE;color:#173404",
+        IssueStatus.Verified => "background:#E6F1FB;color:#042C53",
+        _                    => string.Empty
+    };
+
+    private static Color StatusChipColor(IssueStatus s) => s switch
+    {
+        IssueStatus.Todo     => Color.Default,
+        IssueStatus.Doing    => Color.Warning,
+        IssueStatus.Done     => Color.Success,
+        IssueStatus.Verified => Color.Info,
+        _                    => Color.Default
+    };
+
+    private static string StatusLabel(IssueStatus s) => s switch
+    {
+        IssueStatus.Todo     => "Todo",
+        IssueStatus.Doing    => "Doing",
+        IssueStatus.Done     => "Done",
+        IssueStatus.Verified => "Verified",
+        _                    => s.ToString()
+    };
+
+    private static Color PriorityColor(IssuePriority p) => p switch
+    {
+        IssuePriority.Critical => Color.Error,
+        IssuePriority.High     => Color.Error,
+        IssuePriority.Medium   => Color.Warning,
+        IssuePriority.Low      => Color.Success,
+        _                      => Color.Default
+    };
+
+    private static string IssueTypeIcon(IssueType t) => t switch
+    {
+        IssueType.Bug     => Icons.Material.Filled.BugReport,
+        IssueType.Story   => Icons.Material.Filled.AutoStories,
+        IssueType.Epic    => Icons.Material.Filled.Bolt,
+        IssueType.SubTask => Icons.Material.Filled.SubdirectoryArrowRight,
+        _                 => Icons.Material.Filled.TaskAlt
+    };
+
+    private static Color IssueTypeColor(IssueType t) => t switch
+    {
+        IssueType.Bug     => Color.Error,
+        IssueType.Story   => Color.Success,
+        IssueType.Epic    => Color.Warning,
+        IssueType.SubTask => Color.Default,
+        _                 => Color.Primary
+    };
+
+    // ── 内部クラス ───────────────────────────────────────────
+
+    private enum BoardView { Kanban, Epic }
+
+    private record KanbanColumn(
+        IssueStatus Status, string Label,
+        List<WinConflu.Models.Issue> Issues);
+
+    private class IssueFormModel
+    {
+        public string        Title                 { get; set; } = string.Empty;
+        public string?       Description           { get; set; }
+        public IssueType     Type                  { get; set; } = IssueType.Task;
+        public IssuePriority Priority              { get; set; } = IssuePriority.Medium;
+        public string?       AssigneeSid           { get; set; }
+        public DateTime?     DueDateNullable        { get; set; }
+        public IssueStatus   Status                { get; set; } = IssueStatus.Todo;
+        public string?       ParentIssueNumberStr  { get; set; }
+        public string?       WorkflowComment       { get; set; }
+    }
+}

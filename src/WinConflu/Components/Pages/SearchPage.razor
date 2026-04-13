@@ -1,0 +1,134 @@
+@* WinConflu.NET — SearchPage.razor *@
+@page "/search"
+@layout MainLayout
+@inject ISearchService SearchSvc
+@inject NavigationManager Nav
+
+<PageTitle>検索 — WinConflu.NET</PageTitle>
+
+<div class="mb-4">
+    <MudTextField @bind-Value="_query"
+                  Immediate="false"
+                  Label="全文検索"
+                  Variant="Variant.Outlined"
+                  Adornment="Adornment.End"
+                  AdornmentIcon="@Icons.Material.Filled.Search"
+                  OnAdornmentClick="ExecuteSearch"
+                  @onkeydown="OnKeyDown"
+                  FullWidth="true"
+                  Placeholder="キーワードを入力して Enter..." />
+
+    <div class="d-flex gap-2 mt-2 flex-wrap">
+        @* エンティティフィルタ *@
+        @foreach (var (label, value) in new[] { ("すべて", (string?)null), ("Wiki", "Page"), ("チケット", "Issue") })
+        {
+            <MudChip Size="Size.Small"
+                     Color="@(_entityFilter == value ? Color.Primary : Color.Default)"
+                     OnClick="() => { _entityFilter = value; ExecuteSearch(); }">
+                @label
+            </MudChip>
+        }
+    </div>
+</div>
+
+@if (_loading)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+}
+else if (_response != null)
+{
+    <div class="d-flex align-center gap-2 mb-3">
+        <MudText Typo="Typo.body2" Color="Color.Secondary">
+            @_response.Total 件の結果 (@_response.ElapsedMs.ToString("F0") ms)
+        </MudText>
+    </div>
+
+    @if (!_response.Results.Any())
+    {
+        <MudPaper Elevation="0" Class="pa-8 text-center">
+            <MudIcon Icon="@Icons.Material.Filled.SearchOff" Size="Size.Large" Color="Color.Default" />
+            <MudText Typo="Typo.body1" Class="mt-2">「@_query」に一致する結果が見つかりませんでした。</MudText>
+        </MudPaper>
+    }
+    else
+    {
+        @foreach (var result in _response.Results)
+        {
+            <MudPaper Elevation="1" Class="pa-4 mb-3 cursor-pointer"
+                      Style="border-radius:var(--mud-default-borderradius)"
+                      @onclick="() => Navigate(result)">
+
+                <div class="d-flex align-center gap-2 mb-1">
+                    <MudIcon Icon="@(result.EntityType == "Page" ? Icons.Material.Filled.Article : Icons.Material.Filled.TaskAlt)"
+                             Size="Size.Small"
+                             Color="@(result.EntityType == "Page" ? Color.Primary : Color.Warning)" />
+                    <MudChip Size="Size.Small" Label="true"
+                             Color="@(result.EntityType == "Page" ? Color.Info : Color.Warning)">
+                        @(result.EntityType == "Page" ? "Wiki" : "チケット")
+                    </MudChip>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        @result.UpdatedAt.ToString("yyyy/MM/dd HH:mm")
+                    </MudText>
+                    <MudSpacer />
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        スコア: @result.Rank.ToString("F0")
+                    </MudText>
+                </div>
+
+                <MudText Typo="Typo.h6" Style="font-size:16px;font-weight:500" Class="mb-1">
+                    @result.Title
+                </MudText>
+
+                <MudText Typo="Typo.body2" Color="Color.Secondary"
+                         Style="line-height:1.6">
+                    @((MarkupString)result.Snippet)
+                </MudText>
+            </MudPaper>
+        }
+    }
+}
+
+@code {
+    [SupplyParameterFromQuery(Name = "q")]
+    public string? QueryParam { get; set; }
+
+    private string  _query        = string.Empty;
+    private string? _entityFilter;
+    private bool    _loading      = false;
+    private SearchResponse? _response;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!string.IsNullOrEmpty(QueryParam))
+        {
+            _query = QueryParam;
+            await ExecuteSearch();
+        }
+    }
+
+    private async Task ExecuteSearch()
+    {
+        if (string.IsNullOrWhiteSpace(_query)) return;
+
+        _loading = true;
+        Nav.NavigateTo($"/search?q={Uri.EscapeDataString(_query)}", replace: true);
+
+        _response = await SearchSvc.SearchAsync(new SearchRequest(
+            _query, MaxResults: 30, EntityFilter: _entityFilter));
+
+        _loading = false;
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await ExecuteSearch();
+    }
+
+    private void Navigate(SearchResult result)
+    {
+        var url = result.EntityType == "Page"
+            ? $"/wiki/{result.Id}"
+            : $"/boards/issue/{result.Id}";
+        Nav.NavigateTo(url);
+    }
+}

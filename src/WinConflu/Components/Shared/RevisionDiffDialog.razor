@@ -1,0 +1,189 @@
+@* WinConflu.NET — RevisionDiffDialog.razor
+   バージョン間の差分を表示するダイアログ *@
+
+@inject IDiffService DiffSvc
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center gap-3">
+            <MudIcon Icon="@Icons.Material.Filled.Compare" Color="Color.Primary" />
+            <MudText Typo="Typo.h6">差分表示</MudText>
+            <MudChip Size="Size.Small" Color="Color.Default">
+                v@OldRevision.Version → v@NewRevision.Version
+            </MudChip>
+        </div>
+    </TitleContent>
+    <DialogContent>
+
+        @* ビュー切替 *@
+        <div class="d-flex gap-2 mb-3">
+            <MudToggleIconButton @bind-Toggled="_sideBySide"
+                                 Icon="@Icons.Material.Filled.ViewStream"
+                                 ToggledIcon="@Icons.Material.Filled.CompareArrows"
+                                 Title="@(_sideBySide ? "インライン表示" : "サイドバイサイド表示")" />
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="align-self-center">
+                @(_sideBySide ? "サイドバイサイド" : "インライン")
+            </MudText>
+            <MudSpacer />
+            @if (_diff != null)
+            {
+                <MudChip Size="Size.Small" Color="Color.Success">+@_diff.AddedCount</MudChip>
+                <MudChip Size="Size.Small" Color="Color.Error">-@_diff.DeletedCount</MudChip>
+                <MudChip Size="Size.Small" Color="Color.Default">@_diff.UnchangedCount 行変更なし</MudChip>
+            }
+        </div>
+
+        @if (_loading)
+        {
+            <MudProgressLinear Indeterminate="true" />
+        }
+        else if (_diff != null)
+        {
+            @* ── インライン差分ビュー ─────────────────────────── *@
+            @if (!_sideBySide)
+            {
+                <div style="font-family:var(--mud-font-family-monospace);font-size:12px;
+                            line-height:1.6;overflow-x:auto;max-height:560px;overflow-y:auto;
+                            border:0.5px solid var(--mud-palette-divider);border-radius:8px">
+                    @foreach (var line in _diff.Lines)
+                    {
+                        var (bg, prefix, color) = InlineLineStyle(line.Type);
+                        <div style="@($"display:flex;background:{bg};min-width:100%")">
+                            <span style="@($"color:{color};width:24px;min-width:24px;text-align:center;opacity:0.6;user-select:none")">
+                                @prefix
+                            </span>
+                            <span style="@($"width:48px;min-width:48px;text-align:right;padding:0 8px;color:var(--mud-palette-text-secondary);user-select:none")">
+                                @(line.OldLineNo?.ToString() ?? "")
+                            </span>
+                            <span style="@($"width:48px;min-width:48px;text-align:right;padding:0 8px;color:var(--mud-palette-text-secondary);user-select:none")">
+                                @(line.NewLineNo?.ToString() ?? "")
+                            </span>
+                            <span style="@($"flex:1;padding:0 8px;white-space:pre;overflow:hidden;color:{color}")">
+                                @RenderPieces(line)
+                            </span>
+                        </div>
+                    }
+                </div>
+            }
+
+            @* ── サイドバイサイドビュー ───────────────────────── *@
+            @if (_sideBySide && _sideBySideModel != null)
+            {
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;max-height:560px;overflow-y:auto">
+                    @* 旧バージョン *@
+                    <div>
+                        <div class="pa-2 mb-1" style="background:#FCEBEB;border-radius:6px">
+                            <MudText Typo="Typo.caption" Style="color:#791F1F;font-weight:500">
+                                v@OldRevision.Version（旧）
+                            </MudText>
+                        </div>
+                        <div style="font-family:var(--mud-font-family-monospace);font-size:12px;
+                                    line-height:1.6;overflow-x:auto;
+                                    border:0.5px solid var(--mud-palette-divider);border-radius:6px">
+                            @foreach (var (line, i) in _sideBySideModel.OldText.Lines.Select((l, i) => (l, i)))
+                            {
+                                var (bg, _, color) = SideLineStyle(line.Type);
+                                <div style="@($"display:flex;background:{bg}")">
+                                    <span style="width:40px;min-width:40px;text-align:right;
+                                                  padding:0 6px;color:var(--mud-palette-text-secondary);
+                                                  user-select:none;font-size:10px">
+                                        @(line.Position.HasValue ? line.Position.ToString() : "")
+                                    </span>
+                                    <span style="@($"flex:1;padding:0 6px;white-space:pre;overflow:hidden;color:{color}")">
+                                        @line.Text
+                                    </span>
+                                </div>
+                            }
+                        </div>
+                    </div>
+
+                    @* 新バージョン *@
+                    <div>
+                        <div class="pa-2 mb-1" style="background:#EAF3DE;border-radius:6px">
+                            <MudText Typo="Typo.caption" Style="color:#27500A;font-weight:500">
+                                v@NewRevision.Version（新）
+                            </MudText>
+                        </div>
+                        <div style="font-family:var(--mud-font-family-monospace);font-size:12px;
+                                    line-height:1.6;overflow-x:auto;
+                                    border:0.5px solid var(--mud-palette-divider);border-radius:6px">
+                            @foreach (var line in _sideBySideModel.NewText.Lines)
+                            {
+                                var (bg, _, color) = SideLineStyle(line.Type);
+                                <div style="@($"display:flex;background:{bg}")">
+                                    <span style="width:40px;min-width:40px;text-align:right;
+                                                  padding:0 6px;color:var(--mud-palette-text-secondary);
+                                                  user-select:none;font-size:10px">
+                                        @(line.Position.HasValue ? line.Position.ToString() : "")
+                                    </span>
+                                    <span style="@($"flex:1;padding:0 6px;white-space:pre;overflow:hidden;color:{color}")">
+                                        @line.Text
+                                    </span>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+            }
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="() => MudDialog.Cancel()">閉じる</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = null!;
+    [Parameter] public WinConflu.Models.Revision OldRevision { get; set; } = null!;
+    [Parameter] public WinConflu.Models.Revision NewRevision { get; set; } = null!;
+
+    private bool      _loading      = true;
+    private bool      _sideBySide   = false;
+    private DiffResult?          _diff;
+    private DiffPlex.DiffBuilder.Model.SideBySideDiffModel? _sideBySideModel;
+
+    protected override void OnInitialized()
+    {
+        _diff           = DiffSvc.BuildInlineDiff(OldRevision.Content, NewRevision.Content);
+        _sideBySideModel = DiffSvc.BuildSideBySide(OldRevision.Content, NewRevision.Content);
+        _loading        = false;
+    }
+
+    // インライン差分の行スタイル
+    private static (string Bg, string Prefix, string Color) InlineLineStyle(DiffLineType t) => t switch
+    {
+        DiffLineType.Added    => ("#EAF3DE", "+", "#27500A"),
+        DiffLineType.Deleted  => ("#FCEBEB", "−", "#791F1F"),
+        DiffLineType.Modified => ("#FAEEDA", "~", "#633806"),
+        _                     => ("transparent", " ", "var(--mud-palette-text-primary)")
+    };
+
+    // サイドバイサイドの行スタイル
+    private static (string Bg, string Prefix, string Color) SideLineStyle(DiffPlex.DiffBuilder.Model.ChangeType t) => t switch
+    {
+        DiffPlex.DiffBuilder.Model.ChangeType.Inserted => ("#EAF3DE", "+", "#27500A"),
+        DiffPlex.DiffBuilder.Model.ChangeType.Deleted  => ("#FCEBEB", "−", "#791F1F"),
+        DiffPlex.DiffBuilder.Model.ChangeType.Modified => ("#FAEEDA", "~", "#633806"),
+        _  => ("transparent", " ", "var(--mud-palette-text-primary)")
+    };
+
+    // 単語レベルの差分ハイライト
+    private RenderFragment RenderPieces(DiffLine line)
+    {
+        if (line.SubPieces == null || !line.SubPieces.Any())
+            return @<span>@line.Text</span>;
+
+        return @<span>
+            @foreach (var piece in line.SubPieces)
+            {
+                var bg = piece.Type switch
+                {
+                    DiffPlex.DiffBuilder.Model.ChangeType.Inserted => "background:#C0DD97;border-radius:2px",
+                    DiffPlex.DiffBuilder.Model.ChangeType.Deleted  => "background:#F09595;border-radius:2px",
+                    _ => ""
+                };
+                <span style="@bg">@piece.Text</span>
+            }
+        </span>;
+    }
+}

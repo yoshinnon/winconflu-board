@@ -1,0 +1,290 @@
+@* WinConflu.NET — RoadmapPage.razor
+   プロジェクトのロードマップ / ガントチャートビュー *@
+@page "/boards/{ProjectId:int}/roadmap"
+@layout MainLayout
+@inject IBoardService BoardSvc
+@inject NavigationManager Nav
+
+<PageTitle>ロードマップ — WinConflu.NET</PageTitle>
+
+@if (_loading)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+}
+else if (_project is not null)
+{
+    <div class="d-flex align-center gap-3 mb-4">
+        <MudText Typo="Typo.h5" Style="font-weight:500">
+            @_project.Name — ロードマップ
+        </MudText>
+        <MudSpacer />
+
+        @* 期間スライダー *@
+        <MudText Typo="Typo.body2" Color="Color.Secondary">表示期間:</MudText>
+        <MudButtonGroup Variant="Variant.Outlined" Size="Size.Small">
+            @foreach (var w in new[] { 4, 8, 12, 24 })
+            {
+                <MudButton Color="@(_weeks == w ? Color.Primary : Color.Default)"
+                           OnClick="() => SetWeeks(w)">@w 週</MudButton>
+            }
+        </MudButtonGroup>
+
+        <MudButton Variant="Variant.Outlined" Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.Today"
+                   OnClick="ScrollToToday">今日</MudButton>
+        <MudButton Variant="Variant.Outlined" Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.ArrowBack"
+                   OnClick="() => Nav.NavigateTo($"/boards/{ProjectId}")">カンバンへ</MudButton>
+    </div>
+
+    @* ガントチャート本体 *@
+    <MudPaper Elevation="1" Style="overflow-x:auto">
+        <div style="min-width:800px">
+
+            @* ── ヘッダー行（月 / 週） ─────────────────────── *@
+            <div class="d-flex" style="border-bottom:1px solid var(--mud-palette-divider)">
+                @* ラベル列 *@
+                <div style="width:@(LabelColW)px;min-width:@(LabelColW)px;flex-shrink:0;
+                            padding:8px 12px;font-size:12px;font-weight:500;
+                            border-right:1px solid var(--mud-palette-divider)">
+                    チケット
+                </div>
+                @* タイムライン列 *@
+                <div style="flex:1;overflow:hidden">
+                    @* 月ラベル *@
+                    <div class="d-flex" style="height:24px;border-bottom:0.5px solid var(--mud-palette-divider)">
+                        @foreach (var (month, span) in MonthSpans)
+                        {
+                            <div style="width:@(span * DayW)px;min-width:@(span * DayW)px;
+                                        font-size:11px;font-weight:500;
+                                        padding:4px 6px;overflow:hidden;white-space:nowrap;
+                                        border-right:0.5px solid var(--mud-palette-divider)">
+                                @month
+                            </div>
+                        }
+                    </div>
+                    @* 週ラベル *@
+                    <div class="d-flex" style="height:24px">
+                        @for (int w = 0; w < _weeks; w++)
+                        {
+                            var weekStart = _viewStart.AddDays(w * 7);
+                            <div style="width:@(7 * DayW)px;min-width:@(7 * DayW)px;
+                                        font-size:10px;color:var(--mud-palette-text-secondary);
+                                        padding:4px 4px;overflow:hidden;
+                                        border-right:0.5px solid var(--mud-palette-divider)">
+                                @weekStart.ToString("M/d")
+                            </div>
+                        }
+                    </div>
+                </div>
+            </div>
+
+            @* ── 各チケット行 ──────────────────────────────── *@
+            @foreach (var issue in _issues)
+            {
+                var bar = CalcBar(issue);
+                <div class="d-flex align-center"
+                     style="height:40px;border-bottom:0.5px solid var(--mud-palette-divider)">
+
+                    @* ラベル列 *@
+                    <div style="width:@(LabelColW)px;min-width:@(LabelColW)px;flex-shrink:0;
+                                padding:0 12px;font-size:12px;overflow:hidden;white-space:nowrap;
+                                border-right:1px solid var(--mud-palette-divider);cursor:pointer"
+                         @onclick="() => Nav.NavigateTo($"/boards/issue/{issue.Id}")">
+                        <div class="d-flex align-center gap-1">
+                            <MudIcon Icon="@TypeIcon(issue.Type)"
+                                     Size="Size.Small"
+                                     Color="@TypeColor(issue.Type)"
+                                     Style="font-size:12px" />
+                            <MudText Typo="Typo.caption" Style="font-family:monospace;color:var(--mud-palette-text-secondary)">
+                                @_project.Prefix-@issue.IssueNumber
+                            </MudText>
+                        </div>
+                        <MudText Typo="Typo.caption" Style="overflow:hidden;text-overflow:ellipsis;display:block">
+                            @issue.Title
+                        </MudText>
+                    </div>
+
+                    @* ガントバー列 *@
+                    <div style="flex:1;position:relative;height:100%;overflow:hidden">
+
+                        @* 今日のライン *@
+                        @{ var todayX = (DateTimeOffset.Today - _viewStart).Days * DayW; }
+                        @if (todayX >= 0 && todayX <= _weeks * 7 * DayW)
+                        {
+                            <div style="position:absolute;top:0;bottom:0;
+                                        left:@(todayX)px;width:2px;
+                                        background:#E24B4A;opacity:0.5;z-index:1"></div>
+                        }
+
+                        @* 週区切り縦線 *@
+                        @for (int w = 0; w <= _weeks; w++)
+                        {
+                            <div style="position:absolute;top:0;bottom:0;
+                                        left:@(w * 7 * DayW)px;width:0.5px;
+                                        background:var(--mud-palette-divider)"></div>
+                        }
+
+                        @* ガントバー（期限なしは表示しない） *@
+                        @if (bar.HasValue)
+                        {
+                            var (left, width, color, textColor) = bar.Value;
+                            <div style="position:absolute;top:8px;height:24px;
+                                        left:@(left)px;width:@(Math.Max(width, 8))px;
+                                        background:@color;border-radius:4px;
+                                        display:flex;align-items:center;padding:0 6px;
+                                        overflow:hidden;white-space:nowrap;cursor:pointer;
+                                        transition:opacity 0.15s"
+                                 @onclick="() => Nav.NavigateTo($"/boards/issue/{issue.Id}")"
+                                 title="@issue.Title (@issue.DueDate?.ToString("yyyy/MM/dd"))">
+                                <MudText Typo="Typo.caption"
+                                         Style="@($"color:{textColor};font-size:10px;overflow:hidden;text-overflow:ellipsis")">
+                                    @issue.Title
+                                </MudText>
+                            </div>
+                        }
+                        else
+                        {
+                            @* 期限なしラベル *@
+                            <div style="position:absolute;top:12px;left:8px;
+                                        font-size:10px;color:var(--mud-palette-text-disabled)">
+                                期限未設定
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+
+            @* チケットがない場合 *@
+            @if (!_issues.Any())
+            {
+                <div style="padding:32px;text-align:center;color:var(--mud-palette-text-secondary)">
+                    <MudIcon Icon="@Icons.Material.Filled.CalendarMonth" Size="Size.Large" />
+                    <MudText Typo="Typo.body2">チケットがありません</MudText>
+                </div>
+            }
+
+        </div>
+    </MudPaper>
+
+    @* 凡例 *@
+    <div class="d-flex gap-4 mt-3 flex-wrap">
+        @foreach (IssueStatus s in Enum.GetValues<IssueStatus>())
+        {
+            var (bg, _) = StatusBarColors(s);
+            <div class="d-flex align-center gap-1">
+                <div style="width:14px;height:14px;border-radius:3px;background:@bg"></div>
+                <MudText Typo="Typo.caption">@s</MudText>
+            </div>
+        }
+        <div class="d-flex align-center gap-1">
+            <div style="width:2px;height:14px;background:#E24B4A;opacity:0.6"></div>
+            <MudText Typo="Typo.caption">今日</MudText>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public int ProjectId { get; set; }
+
+    private bool       _loading  = true;
+    private int        _weeks    = 8;
+    private DateTimeOffset _viewStart;
+
+    private const int DayW      = 20;  // 1日あたりの幅(px)
+    private const int LabelColW = 200; // ラベル列幅(px)
+
+    private WinConflu.Models.Project?    _project;
+    private List<WinConflu.Models.Issue> _issues = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        // 表示開始を今月の月初に設定
+        var today  = DateTimeOffset.Today;
+        _viewStart = new DateTimeOffset(today.Year, today.Month, 1, 0, 0, 0, today.Offset);
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _project = await BoardSvc.GetProjectAsync(ProjectId);
+        _issues  = await BoardSvc.GetIssuesAsync(ProjectId);
+        _loading = false;
+    }
+
+    private void SetWeeks(int w) => _weeks = w;
+    private void ScrollToToday()
+    {
+        var today = DateTimeOffset.Today;
+        _viewStart = new DateTimeOffset(today.Year, today.Month, 1, 0, 0, 0, today.Offset);
+    }
+
+    // ── 月ラベルのスパン計算 ─────────────────────────────────
+    private IEnumerable<(string Label, int Days)> MonthSpans
+    {
+        get
+        {
+            var end    = _viewStart.AddDays(_weeks * 7);
+            var cursor = _viewStart;
+            while (cursor < end)
+            {
+                var nextMonth = new DateTimeOffset(
+                    cursor.Year, cursor.Month, 1, 0, 0, 0, cursor.Offset).AddMonths(1);
+                var until = nextMonth < end ? nextMonth : end;
+                var days  = (int)(until - cursor).TotalDays;
+                yield return (cursor.ToString("yyyy年M月"), days);
+                cursor = nextMonth;
+            }
+        }
+    }
+
+    // ── ガントバー位置・色の計算 ─────────────────────────────
+    private (int Left, int Width, string BgColor, string TextColor)? CalcBar(
+        WinConflu.Models.Issue issue)
+    {
+        if (!issue.DueDate.HasValue) return null;
+
+        // 開始日: StartDate → CreatedAt → ViewStart の優先順位
+        var rawStart = issue.StartDate ?? issue.CreatedAt;
+        var start    = rawStart > _viewStart ? rawStart : _viewStart;
+        var end      = issue.DueDate.Value;
+        var viewEnd  = _viewStart.AddDays(_weeks * 7);
+
+        if (end < _viewStart || start > viewEnd) return null;
+
+        var left  = Math.Max(0, (int)(start - _viewStart).TotalDays) * DayW;
+        var right = Math.Min(_weeks * 7, (int)(end - _viewStart).TotalDays + 1) * DayW;
+        var width = right - left;
+
+        var (bg, text) = StatusBarColors(issue.Status);
+        return (left, width, bg, text);
+    }
+
+    private static (string BgColor, string TextColor) StatusBarColors(IssueStatus s) => s switch
+    {
+        IssueStatus.Todo     => ("#D3D1C7", "#444441"),
+        IssueStatus.Doing    => ("#FAC775", "#633806"),
+        IssueStatus.Done     => ("#C0DD97", "#27500A"),
+        IssueStatus.Verified => ("#B5D4F4", "#0C447C"),
+        _                    => ("#D3D1C7", "#444441")
+    };
+
+    private static string TypeIcon(IssueType t) => t switch
+    {
+        IssueType.Bug     => Icons.Material.Filled.BugReport,
+        IssueType.Story   => Icons.Material.Filled.AutoStories,
+        IssueType.Epic    => Icons.Material.Filled.Bolt,
+        IssueType.SubTask => Icons.Material.Filled.SubdirectoryArrowRight,
+        _                 => Icons.Material.Filled.TaskAlt
+    };
+
+    private static Color TypeColor(IssueType t) => t switch
+    {
+        IssueType.Bug     => Color.Error,
+        IssueType.Story   => Color.Success,
+        IssueType.Epic    => Color.Warning,
+        _                 => Color.Primary
+    };
+}
