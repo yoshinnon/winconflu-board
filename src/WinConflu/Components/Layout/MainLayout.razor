@@ -1,0 +1,220 @@
+@* WinConflu.NET — MainLayout.razor *@
+@inherits LayoutComponentBase
+@inject NavigationManager Nav
+@inject IAdGroupService AdGroup
+@inject IPresenceService Presence
+@inject AuthenticationStateProvider AuthState
+
+<MudThemeProvider Theme="_theme" />
+<MudSnackbarProvider />
+<MudDialogProvider />
+
+<MudLayout>
+
+    @* ── トップバー ────────────────────────────────────── *@
+    <MudAppBar Elevation="1" Dense="true" Color="Color.Surface">
+        <MudIconButton Icon="@Icons.Material.Filled.Menu"
+                       Color="Color.Inherit"
+                       Edge="Edge.Start"
+                       OnClick="ToggleDrawer" />
+
+        <MudText Typo="Typo.h6" Class="ml-2" Style="font-weight:500;letter-spacing:-0.3px">
+            WinConflu<span style="color:var(--mud-palette-primary);">.NET</span>
+        </MudText>
+
+        @* 全文検索バー *@
+        <MudSpacer />
+        <MudTextField @bind-Value="_searchQuery"
+                      Placeholder="SQL フルテキスト検索..."
+                      Adornment="Adornment.Start"
+                      AdornmentIcon="@Icons.Material.Filled.Search"
+                      Immediate="true"
+                      DebounceInterval="300"
+                      OnDebounceIntervalElapsed="OnSearch"
+                      Style="max-width:360px;"
+                      Variant="Variant.Outlined"
+                      Margin="Margin.Dense"
+                      Class="mr-4" />
+        <MudSpacer />
+
+        @* Teams プレゼンス + 通知ベル + ユーザーアイコン *@
+        @if (_presence is not null)
+        {
+            <MudChip Size="Size.Small"
+                     Color="PresenceColor(_presence.Availability)"
+                     Icon="@Icons.Material.Filled.Circle"
+                     Class="mr-1">
+                @_presence.Availability
+            </MudChip>
+        }
+        <NotificationBell />
+        <MudAvatar Color="Color.Primary" Size="Size.Small" Class="ml-1">
+            @_initials
+        </MudAvatar>
+    </MudAppBar>
+
+    @* ── サイドナビゲーション ──────────────────────────── *@
+    <MudDrawer @bind-Open="_drawerOpen"
+               Elevation="1"
+               Variant="DrawerVariant.Responsive"
+               ClipMode="DrawerClipMode.Always">
+        <MudNavMenu>
+
+            <MudNavGroup Title="ナビゲーション" Expanded="true">
+                <MudNavLink Href="/wiki"
+                            Icon="@Icons.Material.Filled.Article"
+                            Match="NavLinkMatch.Prefix">
+                    Wiki
+                </MudNavLink>
+                <MudNavLink Href="/boards"
+                            Icon="@Icons.Material.Filled.ViewKanban"
+                            Match="NavLinkMatch.Prefix">
+                    Boards
+                </MudNavLink>
+                <MudNavLink Href="/search"
+                            Icon="@Icons.Material.Filled.Search"
+                            Match="NavLinkMatch.Prefix">
+                    全文検索
+                </MudNavLink>
+            </MudNavGroup>
+
+            <MudDivider Class="my-2" />
+
+            @* Wiki ページツリー *@
+            <MudNavGroup Title="Wiki ツリー" Expanded="true" Icon="@Icons.Material.Filled.AccountTree">
+                @foreach (var page in _rootPages)
+                {
+                    <MudNavLink Href="@($"/wiki/{page.Id}")"
+                                Icon="@Icons.Material.Filled.Description">
+                        @page.Title
+                    </MudNavLink>
+                }
+                <MudNavLink Href="/wiki/new"
+                            Icon="@Icons.Material.Filled.Add"
+                            IconColor="Color.Primary">
+                    新しいページ
+                </MudNavLink>
+            </MudNavGroup>
+
+            <MudDivider Class="my-2" />
+
+            @* プロジェクト一覧 *@
+            <MudNavGroup Title="プロジェクト" Expanded="true" Icon="@Icons.Material.Filled.FolderOpen">
+                @foreach (var project in _projects)
+                {
+                    <MudNavLink Href="@($"/boards/{project.Id}")"
+                                Icon="@Icons.Material.Filled.Dashboard">
+                        @project.Name
+                    </MudNavLink>
+                    <MudNavLink Href="@($"/boards/{project.Id}/roadmap")"
+                                Icon="@Icons.Material.Filled.CalendarMonth"
+                                Class="ml-3">
+                        ロードマップ
+                    </MudNavLink>
+                }
+            </MudNavGroup>
+
+            <MudDivider Class="my-2" />
+
+            <MudNavLink Href="/settings"
+                        Icon="@Icons.Material.Filled.Settings"
+                        Match="NavLinkMatch.Prefix">
+                設定
+            </MudNavLink>
+
+        </MudNavMenu>
+    </MudDrawer>
+
+    @* ── メインコンテンツ ──────────────────────────────── *@
+    <MudMainContent>
+        <MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="pa-4">
+            @Body
+        </MudContainer>
+    </MudMainContent>
+
+</MudLayout>
+
+@code {
+    private bool          _drawerOpen   = true;
+    private string        _searchQuery  = string.Empty;
+    private string        _initials     = "?";
+    private UserPresence? _presence;
+    private List<WinConflu.Models.Page>    _rootPages = [];
+    private List<WinConflu.Models.Project> _projects  = [];
+
+    [Inject] IWikiService  WikiSvc  { get; set; } = null!;
+    [Inject] IBoardService BoardSvc { get; set; } = null!;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthState.GetAuthenticationStateAsync();
+        var user      = authState.User;
+
+        if (user.Identity?.IsAuthenticated == true)
+        {
+            _initials = BuildInitials(user.Identity.Name ?? "?");
+
+            // Teams プレゼンス取得（非同期、失敗しても続行）
+            _ = LoadPresenceAsync(user.Identity.Name!);
+        }
+
+        // サイドバー用データ読み込み
+        _rootPages = await WikiSvc.GetChildrenAsync(null);
+        _projects  = await BoardSvc.GetProjectsAsync(user.Identity?.Name ?? "");
+    }
+
+    private async Task LoadPresenceAsync(string userId)
+    {
+        try
+        {
+            _presence = await Presence.GetPresenceAsync(userId);
+            await InvokeAsync(StateHasChanged);
+        }
+        catch { /* プレゼンス取得失敗は無視 */ }
+    }
+
+    private void ToggleDrawer() => _drawerOpen = !_drawerOpen;
+
+    private void OnSearch()
+    {
+        if (!string.IsNullOrWhiteSpace(_searchQuery))
+            Nav.NavigateTo($"/search?q={Uri.EscapeDataString(_searchQuery)}");
+    }
+
+    private static string BuildInitials(string name)
+    {
+        var parts = name.Split(['\\', '@', ' '], StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2
+            ? $"{parts[0][0]}{parts[1][0]}".ToUpper()
+            : name.Length >= 1 ? name[..1].ToUpper() : "?";
+    }
+
+    private static Color PresenceColor(string availability) => availability switch
+    {
+        "Available"     => Color.Success,
+        "Busy"          => Color.Error,
+        "DoNotDisturb"  => Color.Error,
+        "Away"          => Color.Warning,
+        _               => Color.Default
+    };
+
+    // ── MudBlazor テーマ設定 ─────────────────────────────
+    private readonly MudTheme _theme = new()
+    {
+        PaletteLight = new PaletteLight
+        {
+            Primary         = "#185FA5",
+            PrimaryDarken   = "#0C447C",
+            Secondary       = "#3B6D11",
+            AppbarBackground= "#FFFFFF",
+            AppbarText      = "#2C2C2A",
+            Background      = "#F8F9FA",
+            Surface         = "#FFFFFF",
+            DrawerBackground= "#FFFFFF",
+        },
+        Typography = new Typography
+        {
+            Default = new DefaultTypography { FontFamily = ["Noto Sans JP", "sans-serif"] }
+        }
+    };
+}

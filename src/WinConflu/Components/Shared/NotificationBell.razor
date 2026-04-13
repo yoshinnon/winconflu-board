@@ -1,0 +1,166 @@
+@* WinConflu.NET — NotificationBell.razor
+   トップバーに配置する通知ベルアイコン + ドロップダウン *@
+
+@inject INotificationService NotifSvc
+@inject NavigationManager Nav
+@inject AuthenticationStateProvider AuthState
+@implements IAsyncDisposable
+
+<MudMenu Icon="@Icons.Material.Filled.Notifications"
+         Color="@(_unread > 0 ? Color.Warning : Color.Default)"
+         AnchorOrigin="Origin.BottomRight"
+         TransformOrigin="Origin.TopRight"
+         Dense="true">
+
+    @* バッジ *@
+    <ActivatorContent>
+        <MudBadge Content="@(_unread > 0 ? _unread.ToString() : null)"
+                  Color="Color.Error" Overlap="true">
+            <MudIconButton Icon="@Icons.Material.Filled.Notifications"
+                           Color="@(_unread > 0 ? Color.Warning : Color.Default)"
+                           Size="Size.Small" />
+        </MudBadge>
+    </ActivatorContent>
+
+    <ChildContent>
+        @* ドロップダウンヘッダー *@
+        <div class="d-flex align-center justify-space-between pa-2"
+             style="min-width:320px;border-bottom:0.5px solid var(--mud-palette-divider)">
+            <MudText Typo="Typo.subtitle2">通知</MudText>
+            @if (_notifications.Any())
+            {
+                <MudButton Size="Size.Small" Variant="Variant.Text"
+                           OnClick="MarkAllRead">すべて既読</MudButton>
+            }
+        </div>
+
+        @* 通知リスト *@
+        @if (_loading)
+        {
+            <div class="pa-3"><MudProgressCircular Size="Size.Small" Indeterminate="true" /></div>
+        }
+        else if (!_notifications.Any())
+        {
+            <div class="pa-4 text-center">
+                <MudIcon Icon="@Icons.Material.Filled.NotificationsNone"
+                         Size="Size.Large" Color="Color.Default" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block mt-1">
+                    未読通知はありません
+                </MudText>
+            </div>
+        }
+        else
+        {
+            <div style="max-height:400px;overflow-y:auto">
+                @foreach (var n in _notifications)
+                {
+                    <div class="pa-2 cursor-pointer"
+                         style="border-bottom:0.5px solid var(--mud-palette-divider);
+                                background:@(n.IsRead ? "transparent" : "var(--mud-palette-background-grey)")"
+                         @onclick="() => OpenNotification(n)">
+                        <div class="d-flex gap-2 align-flex-start">
+                            <MudIcon Icon="@KindIcon(n.Kind)"
+                                     Size="Size.Small"
+                                     Color="@KindColor(n.Kind)"
+                                     Style="margin-top:2px;flex-shrink:0" />
+                            <div style="flex:1;min-width:0">
+                                <MudText Typo="Typo.body2" Style="font-weight:500;line-height:1.4">
+                                    @n.Title
+                                </MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary"
+                                         Style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                                    @n.Body
+                                </MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    @n.CreatedAt.ToString("M/d HH:mm")
+                                </MudText>
+                            </div>
+                            @if (!n.IsRead)
+                            {
+                                <div style="width:8px;height:8px;border-radius:50%;
+                                            background:#378ADD;flex-shrink:0;margin-top:6px"></div>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </ChildContent>
+</MudMenu>
+
+@code {
+    private bool                    _loading       = true;
+    private int                     _unread        = 0;
+    private string                  _userSid       = string.Empty;
+    private List<AppNotification>   _notifications = [];
+    private Timer?                  _pollTimer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthState.GetAuthenticationStateAsync();
+        _userSid = auth.User.Identity?.Name ?? string.Empty;
+
+        await LoadAsync();
+
+        // 30 秒ごとにポーリング（SignalR Hub の代替として）
+        _pollTimer = new Timer(async _ =>
+        {
+            await LoadAsync();
+            await InvokeAsync(StateHasChanged);
+        }, null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
+    }
+
+    private async Task LoadAsync()
+    {
+        if (string.IsNullOrEmpty(_userSid)) return;
+        _notifications = await NotifSvc.GetUnreadAsync(_userSid);
+        _unread        = _notifications.Count;
+        _loading       = false;
+    }
+
+    private async Task OpenNotification(AppNotification n)
+    {
+        await NotifSvc.MarkReadAsync(n.Id);
+        n.IsRead = true;
+        _unread  = Math.Max(0, _unread - 1);
+
+        if (!string.IsNullOrEmpty(n.LinkUrl))
+            Nav.NavigateTo(n.LinkUrl);
+    }
+
+    private async Task MarkAllRead()
+    {
+        await NotifSvc.MarkAllReadAsync(_userSid);
+        _notifications.ForEach(n => n.IsRead = true);
+        _unread = 0;
+    }
+
+    private static string KindIcon(NotificationKind k) => k switch
+    {
+        NotificationKind.IssueAssigned       => Icons.Material.Filled.AssignmentInd,
+        NotificationKind.IssueStatusChanged  => Icons.Material.Filled.SwapHoriz,
+        NotificationKind.IssueCommented      => Icons.Material.Filled.Comment,
+        NotificationKind.DueDateApproaching  => Icons.Material.Filled.Schedule,
+        NotificationKind.DueDateOverdue      => Icons.Material.Filled.Warning,
+        NotificationKind.AnnotationReplied   => Icons.Material.Filled.AddComment,
+        NotificationKind.PageUpdated         => Icons.Material.Filled.Article,
+        NotificationKind.WorkflowBlocked     => Icons.Material.Filled.Block,
+        NotificationKind.MentionedInComment  => Icons.Material.Filled.AlternateEmail,
+        _                                    => Icons.Material.Filled.Notifications
+    };
+
+    private static Color KindColor(NotificationKind k) => k switch
+    {
+        NotificationKind.DueDateApproaching  => Color.Warning,
+        NotificationKind.DueDateOverdue      => Color.Error,
+        NotificationKind.WorkflowBlocked     => Color.Error,
+        NotificationKind.MentionedInComment  => Color.Primary,
+        _                                    => Color.Default
+    };
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_pollTimer is not null)
+            await _pollTimer.DisposeAsync();
+    }
+}

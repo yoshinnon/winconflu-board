@@ -1,0 +1,270 @@
+# ============================================================
+# WinConflu.NET + Boards — CI/CD パイプライン
+# トリガー: main ブランチへの push
+# フロー:  build → test → EF migration → staging deploy → slot swap
+# ============================================================
+
+name: Deploy WinConflu.NET
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:    # 手動実行も可能
+
+env:
+  DOTNET_VERSION:       '10.0.x'
+  APP_NAME:             'wcn-prod-app'       # App Service 名（terraform output で確認）
+  RESOURCE_GROUP:       'wcn-prod-rg'
+  SQL_SERVER:           'wcn-prod-sql.database.windows.net'
+  SQL_DATABASE:         'wcn-prod-db'
+  PROJECT_PATH:         'src/WinConflu/WinConflu.csproj'
+  TEST_PROJECT_PATH:    'src/WinConflu.Tests/WinConflu.Tests.csproj'
+
+jobs:
+
+  # ──────────────────────────────────────────────────────────
+  # JOB 1: ビルド & テスト
+  # ──────────────────────────────────────────────────────────
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      # NuGet キャッシュ（2回目以降の高速化）
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/packages.lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Restore dependencies
+        run: dotnet restore ${{ env.PROJECT_PATH }}
+
+      - name: Build (Release)
+        run: dotnet build ${{ env.PROJECT_PATH }} --configuration Release --no-restore
+
+      - name: Run unit tests
+        run: |
+          dotnet test ${{ env.TEST_PROJECT_PATH }} \
+            --configuration Release \
+            --no-build \
+            --verbosity normal \
+            --logger "trx;LogFileName=test-results.trx" \
+            --collect:"XPlat Code Coverage"
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: '**/test-results.trx'
+
+      # ── Publish（デプロイ用パッケージ生成） ──
+      - name: Publish
+        run: |
+          dotnet publish ${{ env.PROJECT_PATH }} \
+            --configuration Release \
+            --output ./publish \
+            --no-restore
+
+      - name: Upload publish artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-package
+          path: ./publish
+          retention-days: 7
+
+  # ──────────────────────────────────────────────────────────
+  # JOB 2: EF Core マイグレーション（本番 push 時のみ）
+  # ──────────────────────────────────────────────────────────
+  migrate:
+    name: EF Core Migration
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      id-token: write    # OIDC 認証に必要
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      # OIDC で Azure にシークレットレス認証
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install dotnet-ef tool
+        run: dotnet tool install --global dotnet-ef
+
+      # べき等スクリプト生成（何度実行しても安全）
+      - name: Generate idempotent migration script
+        run: |
+          dotnet ef migrations script \
+            --idempotent \
+            --output ./migrations.sql \
+            --project ${{ env.PROJECT_PATH }} \
+            --no-build
+
+      # スクリプトをアーティファクトに保存（監査用）
+      - name: Upload migration script
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-script
+          path: ./migrations.sql
+
+      # SQL Database へマイグレーション適用
+      # Managed Identity + Azure CLI で接続
+      - name: Apply EF migration
+        run: |
+          ACCESS_TOKEN=$(az account get-access-token \
+            --resource https://database.windows.net/ \
+            --query accessToken -o tsv)
+
+          sqlcmd \
+            -S "${{ env.SQL_SERVER }}" \
+            -d "${{ env.SQL_DATABASE }}" \
+            -G \
+            -i ./migrations.sql
+
+  # ──────────────────────────────────────────────────────────
+  # JOB 3: Staging スロットへデプロイ
+  # ──────────────────────────────────────────────────────────
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: migrate
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment:
+      name: staging
+      url: ${{ steps.deploy.outputs.webapp-url }}
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Download app package
+        uses: actions/download-artifact@v4
+        with:
+          name: app-package
+          path: ./publish
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to staging slot
+        id: deploy
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name:  ${{ env.APP_NAME }}
+          slot-name: staging
+          package:   ./publish
+
+      - name: Verify staging health
+        run: |
+          STAGING_URL="https://${{ env.APP_NAME }}-staging.azurewebsites.net"
+          echo "Staging URL: $STAGING_URL"
+
+          # 最大30秒 × 10回 = 5分待機
+          for i in {1..10}; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$STAGING_URL/health")
+            echo "Attempt $i: HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then
+              echo "Staging is healthy!"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "Staging health check failed"
+          exit 1
+
+  # ──────────────────────────────────────────────────────────
+  # JOB 4: Slot Swap（staging → production）
+  # ──────────────────────────────────────────────────────────
+  swap-to-production:
+    name: Swap to Production
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    environment:
+      name: production
+      url: https://${{ env.APP_NAME }}.azurewebsites.net
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Swap staging to production
+        uses: azure/CLI@v2
+        with:
+          azcliversion: latest
+          inlineScript: |
+            az webapp deployment slot swap \
+              --resource-group "${{ env.RESOURCE_GROUP }}" \
+              --name "${{ env.APP_NAME }}" \
+              --slot staging \
+              --target-slot production
+
+      - name: Verify production health
+        run: |
+          PROD_URL="https://${{ env.APP_NAME }}.azurewebsites.net"
+          echo "Production URL: $PROD_URL"
+
+          for i in {1..5}; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$PROD_URL/health")
+            echo "Attempt $i: HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then
+              echo "Production deployment verified!"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "Production health check failed - consider rollback"
+          exit 1
+
+      # 失敗時は自動ロールバック
+      - name: Rollback on failure
+        if: failure()
+        uses: azure/CLI@v2
+        with:
+          azcliversion: latest
+          inlineScript: |
+            echo "Swap failed. Rolling back..."
+            az webapp deployment slot swap \
+              --resource-group "${{ env.RESOURCE_GROUP }}" \
+              --name "${{ env.APP_NAME }}" \
+              --slot staging \
+              --target-slot production

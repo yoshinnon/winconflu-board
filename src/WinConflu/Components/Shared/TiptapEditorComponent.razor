@@ -1,0 +1,284 @@
+@* WinConflu.NET — TiptapEditorComponent.razor
+   Tiptap WYSIWYG エディタの Blazor ラッパー
+   ・DOM 管理を完全に JS に委譲（ShouldRender=false）
+   ・JSInterop で JSON のやり取りのみ行う *@
+
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+@inject IAttachmentService AttachSvc
+@inject IBoardService BoardSvc
+@inject IUserProfileService UserProfileSvc
+@inject AuthenticationStateProvider AuthState
+@inject ISnackbar Snackbar
+
+@* ── ツールバー（Blazor で描画 → JS エディタに命令） ─────── *@
+<div class="wcn-editor-wrapper">
+
+    <div class="wcn-toolbar">
+        @* 書式 *@
+        <button class="wcn-toolbar-btn" title="太字 (Ctrl+B)"         @onclick="() => ExecCmd("bold")">          <b>B</b></button>
+        <button class="wcn-toolbar-btn" title="斜体 (Ctrl+I)"         @onclick="() => ExecCmd("italic")">        <i>I</i></button>
+        <button class="wcn-toolbar-btn" title="下線 (Ctrl+U)"         @onclick="() => ExecCmd("underline")">     <u>U</u></button>
+        <button class="wcn-toolbar-btn" title="打ち消し"               @onclick="() => ExecCmd("strike")">        <s>S</s></button>
+        <button class="wcn-toolbar-btn" title="コード"                 @onclick="() => ExecCmd("code")">         <code>`</code></button>
+        <div class="wcn-toolbar-sep"></div>
+
+        @* 見出し *@
+        <button class="wcn-toolbar-btn" title="見出し 1" @onclick="() => ExecCmd("h1")">H1</button>
+        <button class="wcn-toolbar-btn" title="見出し 2" @onclick="() => ExecCmd("h2")">H2</button>
+        <button class="wcn-toolbar-btn" title="見出し 3" @onclick="() => ExecCmd("h3")">H3</button>
+        <div class="wcn-toolbar-sep"></div>
+
+        @* リスト *@
+        <button class="wcn-toolbar-btn" title="箇条書き"     @onclick="() => ExecCmd("bulletList")">≡</button>
+        <button class="wcn-toolbar-btn" title="番号リスト"   @onclick="() => ExecCmd("orderedList")">1.</button>
+        <button class="wcn-toolbar-btn" title="タスクリスト" @onclick="() => ExecCmd("taskList")">☑</button>
+        <div class="wcn-toolbar-sep"></div>
+
+        @* テーブル *@
+        <button class="wcn-toolbar-btn" title="テーブル挿入"    @onclick="() => ExecCmd("table")">⊞</button>
+        <button class="wcn-toolbar-btn" title="行を追加"        @onclick="() => ExecCmd("addRowAfter")">+行</button>
+        <button class="wcn-toolbar-btn" title="列を追加"        @onclick="() => ExecCmd("addColumnAfter")">+列</button>
+        <button class="wcn-toolbar-btn" title="セルを結合"      @onclick="() => ExecCmd("mergeCells")">⊠</button>
+        <div class="wcn-toolbar-sep"></div>
+
+        @* パネル *@
+        <button class="wcn-toolbar-btn" title="Info ボックス"    @onclick="() => ExecCmd("infoBox_info")">ℹ️</button>
+        <button class="wcn-toolbar-btn" title="Warning ボックス" @onclick="() => ExecCmd("infoBox_warning")">⚠️</button>
+        <button class="wcn-toolbar-btn" title="Tip ボックス"     @onclick="() => ExecCmd("infoBox_tip")">💡</button>
+        <div class="wcn-toolbar-sep"></div>
+
+        @* 挿入 *@
+        <button class="wcn-toolbar-btn" title="リンク"           @onclick="() => ExecCmd("link")">🔗</button>
+        <button class="wcn-toolbar-btn" title="コードブロック"   @onclick="() => ExecCmd("codeBlock")"></>️</button>
+        <button class="wcn-toolbar-btn" title="区切り線"         @onclick="() => ExecCmd("hr")">—</button>
+        <div class="wcn-toolbar-sep"></div>
+
+        @* 元に戻す・やり直し *@
+        <button class="wcn-toolbar-btn" title="元に戻す (Ctrl+Z)"   @onclick="() => ExecCmd("undo")">↩</button>
+        <button class="wcn-toolbar-btn" title="やり直し (Ctrl+Y)"   @onclick="() => ExecCmd("redo")">↪</button>
+        <div class="wcn-toolbar-sep"></div>
+
+        @* 画像アップロード *@
+        <MudFileUpload T="IBrowserFile" FilesChanged="OnImageUpload" Accept="image/*"
+                       Style="display:inline-block;margin:0">
+            <ActivatorContent>
+                <button class="wcn-toolbar-btn" title="画像を挿入" type="button">🖼️</button>
+            </ActivatorContent>
+        </MudFileUpload>
+    </div>
+
+    @* ── エディタ DOM コンテナ（JS が完全に管理） ────────── *@
+    <div id="@_editorId" @ref="_editorRef"></div>
+
+    @* ── 文字数カウンタ ───────────────────────────────────── *@
+    <div class="wcn-char-count">@_charCount 文字</div>
+
+</div>
+
+@code {
+    // ── パラメータ ─────────────────────────────────────────
+
+    /// <summary>初期コンテンツ（ProseMirror JSON 文字列 or null で空エディタ）</summary>
+    [Parameter] public string? InitialJson     { get; set; }
+
+    /// <summary>既存の Markdown（初回のみ使用。JSON が優先される）</summary>
+    [Parameter] public string? InitialMarkdown { get; set; }
+
+    /// <summary>コンテンツが変更されるたびに呼ばれるコールバック</summary>
+    [Parameter] public EventCallback<string> OnChange { get; set; }
+
+    // ── 内部状態 ──────────────────────────────────────────
+
+    private readonly string _editorId = $"wcn-tiptap-{Guid.NewGuid():N}";
+    private ElementReference _editorRef;
+    private DotNetObjectReference<TiptapEditorComponent>? _dotNetRef;
+    private string _currentUserSid = string.Empty;
+    private int    _charCount      = 0;
+    private bool   _initialized    = false;
+
+    // ── ライフサイクル ────────────────────────────────────
+
+    // Blazor の差分レンダリングを完全に無効化
+    // → Tiptap が DOM を管理するため Blazor に触らせない
+    protected override bool ShouldRender() => !_initialized;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        var auth = await AuthState.GetAuthenticationStateAsync();
+        _currentUserSid = auth.User.Identity?.Name ?? string.Empty;
+
+        _dotNetRef = DotNetObjectReference.Create(this);
+
+        // 初期コンテンツの決定
+        string? jsonToLoad = InitialJson;
+        if (string.IsNullOrEmpty(jsonToLoad) && !string.IsNullOrEmpty(InitialMarkdown))
+        {
+            // Markdown → HTML → Tiptap が解釈できる形式で渡す
+            // （MarkdownService で HTML に変換済みのものを使用）
+            jsonToLoad = null; // setMarkdown で別途セット
+        }
+
+        await JS.InvokeVoidAsync("wcnEditor.init", _editorId, _dotNetRef, jsonToLoad);
+
+        if (!string.IsNullOrEmpty(InitialMarkdown) && string.IsNullOrEmpty(InitialJson))
+        {
+            // Markdown HTML をそのまま Tiptap に流し込み（パース対応）
+            await JS.InvokeVoidAsync("wcnEditor.setMarkdown", _editorId, InitialMarkdown);
+        }
+
+        _initialized = true;
+    }
+
+    // ── Blazor → JS コマンド実行 ─────────────────────────
+
+    private async Task ExecCmd(string command)
+    {
+        await JS.InvokeVoidAsync("wcnEditorCommands.exec", _editorId, command);
+    }
+
+    // ── JS → Blazor コールバック（[JSInvokable]） ─────────
+
+    /// <summary>エディタ内容が変わるたびに JS から呼ばれる（デバウンス済み）</summary>
+    [JSInvokable]
+    public async Task OnEditorChange(string json)
+    {
+        // 文字数更新（プレーンテキスト換算）
+        try
+        {
+            var doc = System.Text.Json.JsonDocument.Parse(json);
+            _charCount = ExtractPlainText(doc.RootElement).Length;
+        }
+        catch { /* JSON パース失敗は無視 */ }
+
+        await OnChange.InvokeAsync(json);
+        // ShouldRender=false なので StateHasChanged は文字数更新時のみ最小限に
+        await InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>@メンション検索（JS から呼ばれる）</summary>
+    [JSInvokable]
+    public async Task<List<MentionUserDto>> SearchMentionUsers(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query) || query.Length < 1)
+            return [];
+        try
+        {
+            var users = await UserProfileSvc.SearchUsersAsync(query, top: 8);
+            var result = new List<MentionUserDto>();
+            foreach (var user in users)
+            {
+                string? photoBase64 = null;
+                try
+                {
+                    var photoBytes = await UserProfileSvc.GetPhotoAsync(user.Id);
+                    if (photoBytes != null)
+                        photoBase64 = Convert.ToBase64String(photoBytes);
+                }
+                catch { /* 写真なしは無視 */ }
+
+                result.Add(new MentionUserDto(
+                    user.Id,
+                    user.DisplayName,
+                    user.Department,
+                    photoBase64));
+            }
+            return result;
+        }
+        catch { return []; }
+    }
+
+    /// <summary>[[KEY-NNN]] → Issue バッジデータ取得（JS から呼ばれる）</summary>
+    [JSInvokable]
+    public async Task<IssueBadgeDto?> GetIssueBadge(string issueKey)
+    {
+        try
+        {
+            // プレフィックスと番号を分解
+            var parts = issueKey.Split('-');
+            if (parts.Length != 2 || !int.TryParse(parts[1], out var num)) return null;
+
+            var prefix  = parts[0];
+            var project = await BoardSvc.GetProjectsAsync(_currentUserSid);
+            var proj    = project.FirstOrDefault(p => p.Prefix == prefix);
+            if (proj == null) return null;
+
+            var issues  = await BoardSvc.GetIssuesAsync(proj.Id);
+            var issue   = issues.FirstOrDefault(i => i.IssueNumber == num);
+            if (issue == null) return null;
+
+            return new IssueBadgeDto(
+                issue.Id,
+                issueKey,
+                issue.Title,
+                issue.Status.ToString(),
+                issue.Priority.ToString(),
+                issue.AssigneeSid);
+        }
+        catch { return null; }
+    }
+
+    // ── 公開メソッド（WikiPage から呼ばれる） ─────────────
+
+    /// <summary>現在の JSON を取得（保存時に呼ぶ）</summary>
+    public async Task<string> GetJsonAsync()
+        => await JS.InvokeAsync<string>("wcnEditor.getJson", _editorId);
+
+    /// <summary>コンテンツを外部からセット（テンプレート適用時など）</summary>
+    public async Task SetJsonAsync(string json)
+        => await JS.InvokeVoidAsync("wcnEditor.setJson", _editorId, json);
+
+    public async Task SetMarkdownAsync(string markdown)
+        => await JS.InvokeVoidAsync("wcnEditor.setMarkdown", _editorId, markdown);
+
+    public async Task FocusAsync()
+        => await JS.InvokeVoidAsync("wcnEditor.focus", _editorId);
+
+    // ── 画像アップロード ──────────────────────────────────
+
+    private async Task OnImageUpload(IBrowserFile file)
+    {
+        try
+        {
+            await using var stream = file.OpenReadStream(maxAllowedSize: 20 * 1024 * 1024);
+            var att = await AttachSvc.UploadAsync(
+                stream, file.Name, file.ContentType,
+                "Page", 0, _currentUserSid);
+
+            await JS.InvokeVoidAsync("wcnEditor.insertImage", _editorId, att.BlobUrl, file.Name);
+            Snackbar.Add($"{file.Name} を挿入しました。", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"画像のアップロードに失敗: {ex.Message}", Severity.Error);
+        }
+    }
+
+    // ── プレーンテキスト抽出（文字数カウント用） ────────────
+
+    private static string ExtractPlainText(System.Text.Json.JsonElement node)
+    {
+        var sb = new System.Text.StringBuilder();
+        if (node.TryGetProperty("text", out var textEl))
+            sb.Append(textEl.GetString());
+        if (node.TryGetProperty("content", out var contentEl) && contentEl.ValueKind == System.Text.Json.JsonValueKind.Array)
+            foreach (var child in contentEl.EnumerateArray())
+                sb.Append(ExtractPlainText(child));
+        return sb.ToString();
+    }
+
+    // ── 破棄 ─────────────────────────────────────────────
+
+    public async ValueTask DisposeAsync()
+    {
+        try { await JS.InvokeVoidAsync("wcnEditor.destroy", _editorId); }
+        catch { /* アンマウント後の例外は無視 */ }
+        _dotNetRef?.Dispose();
+    }
+}
+
+// ── JS → C# の DTO ────────────────────────────────────────
+public record MentionUserDto(string Id, string DisplayName, string? Department, string? PhotoBase64);
+public record IssueBadgeDto(int IssueId, string Key, string Title, string Status, string Priority, string? Assignee);

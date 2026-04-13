@@ -1,0 +1,32 @@
+@* WinConflu.NET — App.razor (ルートコンポーネント) *@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WinConflu.NET</title>
+    <base href="/" />
+
+    @* MudBlazor 9 CSS *@
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet" />
+    <link href="_content/MudBlazor/MudBlazor.min.css" rel="stylesheet" />
+    <link href="css/wcn.css" rel="stylesheet" />
+    <link href="css/wcn-editor.css" rel="stylesheet" />
+
+    <HeadOutlet />
+</head>
+<body>
+    <Routes />
+
+    @* Blazor Server Script *@
+    <script src="_framework/blazor.server.js"></script>
+    @* MudBlazor 9 JS *@
+    <script src="_content/MudBlazor/MudBlazor.min.js"></script>
+    @* WinConflu カスタム JS *@
+    <script src="js/wcn.js"></script>
+    @* Tiptap WYSIWYG エディタバンドル（npm run build で生成） *@
+    <script src="dist/wcn-editor.iife.js"></script>
+    @* エディタコマンドブリッジ *@
+    <script src="js/wcn-editor-bridge.js"></script>
+</body>
+</html>

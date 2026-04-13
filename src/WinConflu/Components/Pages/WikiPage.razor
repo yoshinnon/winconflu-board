@@ -1,0 +1,627 @@
+@* WinConflu.NET — WikiPage.razor
+   Tiptap WYSIWYG エディタ統合版 *@
+@page "/wiki/{PageId:int}"
+@page "/wiki/new"
+@layout MainLayout
+@inject IWikiService WikiSvc
+@inject IAttachmentService AttachSvc
+@inject IInlineAnnotationService AnnotationSvc
+@inject IMarkdownService MarkdownSvc
+@inject IProseMirrorService ProseMirrorSvc
+@inject IDiffService DiffSvc
+@inject NavigationManager Nav
+@inject ISnackbar Snackbar
+@inject IDialogService Dialog
+@inject AuthenticationStateProvider AuthState
+@inject IJSRuntime JS
+
+<PageTitle>@(_page?.Title ?? "新しいページ") — WinConflu.NET</PageTitle>
+
+@if (_loading)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+}
+else
+{
+    <MudBreadcrumbs Items="_breadcrumbs" Class="mb-2 pa-0" />
+
+    @* ── ページヘッダー ───────────────────────────────────── *@
+    <div class="d-flex align-center gap-3 mb-4 flex-wrap">
+        @if (!_editMode)
+        {
+            <MudText Typo="Typo.h4" Style="font-weight:500;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                @_page?.Title
+            </MudText>
+
+            @* コメント数バッジ *@
+            <MudBadge Content="@(_openAnnotationCount > 0 ? _openAnnotationCount.ToString() : null)"
+                      Color="Color.Warning" Overlap="true">
+                <MudIconButton Icon="@Icons.Material.Filled.Comment"
+                               Color="@(_showAnnotations ? Color.Warning : Color.Default)"
+                               Size="Size.Small" Title="インラインコメント"
+                               OnClick="ToggleAnnotations" />
+            </MudBadge>
+
+            <MudChip Size="Size.Small" Color="Color.Default" Class="d-none d-sm-flex">
+                @(_page?.ContentFormat == "json" ? "WYSIWYG" : "Markdown")
+            </MudChip>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.Edit"
+                       OnClick="EnableEdit">編集</MudButton>
+            <MudButton Variant="Variant.Outlined"
+                       StartIcon="@Icons.Material.Filled.History"
+                       OnClick="ShowRevisions">履歴</MudButton>
+            <MudButton Variant="Variant.Outlined"
+                       StartIcon="@Icons.Material.Filled.Share"
+                       OnClick="ShareToTeams">Teams 共有</MudButton>
+        }
+        else
+        {
+            <MudTextField @bind-Value="_editTitle" Label="タイトル"
+                          Variant="Variant.Outlined" FullWidth="true"
+                          Required="true" Class="flex-grow-1"
+                          Style="min-width:0" />
+            <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.Save"
+                       OnClick="SavePage" Disabled="_saving">
+                @if (_saving)
+                {
+                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                }
+                保存
+            </MudButton>
+            <MudButton Variant="Variant.Outlined" OnClick="CancelEdit">キャンセル</MudButton>
+        }
+    </div>
+
+    @* ── メタ情報 ─────────────────────────────────────────── *@
+    @if (_page is not null && !_editMode)
+    {
+        <div class="d-flex align-center gap-3 mb-4 flex-wrap">
+            <MudAvatar Size="Size.Small" Color="Color.Primary" Style="width:22px;height:22px;font-size:10px">
+                @_page.UpdatedBy.FirstOrDefault()
+            </MudAvatar>
+            <MudText Typo="Typo.body2" Color="Color.Secondary">
+                @_page.UpdatedBy · @_page.UpdatedAt.ToString("yyyy/MM/dd HH:mm")
+            </MudText>
+            <MudText Typo="Typo.caption" Style="font-family:monospace;color:var(--mud-palette-text-secondary)">
+                HierarchyId: @_page.Path.ToString()
+            </MudText>
+        </div>
+    }
+
+    @* ── メインレイアウト ────────────────────────────────── *@
+    <MudGrid>
+
+        @* 本文エリア *@
+        <MudItem xs="12" md="@(_showAnnotations ? 7 : 9)">
+
+            @* ── 閲覧モード ─────────────────────────────── *@
+            @if (!_editMode)
+            {
+                <MudPaper Elevation="0" Class="pa-4 wcn-page-body"
+                          id="wcn-page-body"
+                          @onmouseup="OnTextSelected">
+                    @((MarkupString)_renderedHtml)
+                </MudPaper>
+
+                @* テキスト選択後のコメント追加ポップオーバー *@
+                @if (_showAddAnnotation)
+                {
+                    <MudPaper Elevation="4" Class="pa-2 d-flex align-center gap-2"
+                              Style="@($"position:absolute;top:{_popoverTop}px;left:{_popoverLeft}px;z-index:1000;border-radius:20px")">
+                        <MudIcon Icon="@Icons.Material.Filled.AddComment"
+                                 Size="Size.Small" Color="Color.Warning" />
+                        <MudText Typo="Typo.caption">コメントを追加</MudText>
+                        <MudIconButton Size="Size.Small" Icon="@Icons.Material.Filled.Add"
+                                       Color="Color.Warning" OnClick="OpenNewAnnotationDialog" />
+                    </MudPaper>
+                }
+            }
+
+            @* ── 編集モード（Tiptap WYSIWYG） ───────────── *@
+            @if (_editMode)
+            {
+                @* テンプレート選択ボタン（新規のみ） *@
+                @if (!PageId.HasValue)
+                {
+                    <div class="d-flex align-center gap-2 mb-2">
+                        <MudButton Variant="Variant.Outlined"
+                                   StartIcon="@Icons.Material.Filled.ContentCopy"
+                                   Size="Size.Small" OnClick="OpenTemplatePicker">
+                            テンプレートから作成
+                        </MudButton>
+                        @if (!string.IsNullOrEmpty(_appliedTemplateName))
+                        {
+                            <MudChip Size="Size.Small" Color="Color.Info"
+                                     OnClose="ClearTemplate"
+                                     CloseIcon="@Icons.Material.Filled.Close">
+                                @_appliedTemplateName
+                            </MudChip>
+                        }
+                    </div>
+                }
+
+                @* Tiptap エディタコンポーネント *@
+                <TiptapEditorComponent
+                    @ref="_editor"
+                    InitialJson="@(_initialEditorJson)"
+                    InitialMarkdown="@(_initialEditorMarkdown)"
+                    OnChange="OnEditorChange" />
+            }
+
+        </MudItem>
+
+        @* ── 右サイドパネル（閲覧時） ───────────────────── *@
+        @if (!_showAnnotations)
+        {
+            <MudItem xs="12" md="3">
+                @if (_childPages.Any())
+                {
+                    <MudPaper Elevation="1" Class="pa-3 mb-3">
+                        <MudText Typo="Typo.subtitle2" Class="mb-2">子ページ</MudText>
+                        @foreach (var child in _childPages)
+                        {
+                            <MudLink Href="@($"/wiki/{child.Id}")" Class="d-block mb-1">
+                                <MudIcon Icon="@Icons.Material.Filled.Description"
+                                         Size="Size.Small" Class="mr-1" />
+                                @child.Title
+                            </MudLink>
+                        }
+                    </MudPaper>
+                }
+
+                @if (_linkedIssues.Any())
+                {
+                    <MudPaper Elevation="1" Class="pa-3 mb-3">
+                        <MudText Typo="Typo.subtitle2" Class="mb-2">関連タスク</MudText>
+                        @foreach (var issue in _linkedIssues)
+                        {
+                            <div class="d-flex align-center gap-2 mb-2">
+                                <MudChip Size="Size.Small" Color="Color.Warning" Label="true">
+                                    @issue.Status
+                                </MudChip>
+                                <MudLink Href="@($"/boards/issue/{issue.Id}")" Typo="Typo.body2">
+                                    @issue.Title
+                                </MudLink>
+                            </div>
+                        }
+                    </MudPaper>
+                }
+
+                <MudPaper Elevation="1" Class="pa-3">
+                    <MudText Typo="Typo.subtitle2" Class="mb-2">添付ファイル</MudText>
+                    @foreach (var att in _attachments)
+                    {
+                        <div class="d-flex align-center gap-1 mb-1">
+                            <MudIcon Icon="@Icons.Material.Filled.AttachFile" Size="Size.Small" />
+                            <MudLink Href="@($"/api/attachments/{att.Id}")" Typo="Typo.body2">
+                                @att.FileName
+                            </MudLink>
+                        </div>
+                    }
+                </MudPaper>
+            </MudItem>
+        }
+
+        @* ── インラインコメントパネル ────────────────────── *@
+        @if (_showAnnotations && PageId.HasValue)
+        {
+            <MudItem xs="12" md="5">
+                <InlineAnnotationPanel PageId="@PageId.Value" Visible="true"
+                                       OnAnnotationCountChanged="cnt => { _openAnnotationCount = cnt; StateHasChanged(); }"
+                                       @ref="_annotationPanel" />
+            </MudItem>
+        }
+
+    </MudGrid>
+}
+
+@* ── バージョン履歴ダイアログ ──────────────────────────── *@
+<MudDialog @bind-IsVisible="_showRevisions">
+    <TitleContent><MudText Typo="Typo.h6">バージョン履歴</MudText></TitleContent>
+    <DialogContent>
+        <MudTable Items="_revisions" Dense="true" Hover="true">
+            <HeaderContent>
+                <MudTh>Ver</MudTh><MudTh>形式</MudTh><MudTh>更新者</MudTh><MudTh>日時</MudTh><MudTh>コメント</MudTh><MudTh></MudTh>
+            </HeaderContent>
+            <RowTemplate Context="rev">
+                <MudTd>v@rev.Version</MudTd>
+                <MudTd>
+                    <MudChip Size="Size.Small" Label="true"
+                             Color="@(rev.ContentFormat == "json" ? Color.Primary : Color.Default)">
+                        @(rev.ContentFormat == "json" ? "WYSIWYG" : "MD")
+                    </MudChip>
+                </MudTd>
+                <MudTd>@rev.AuthorSid</MudTd>
+                <MudTd>@rev.CreatedAt.ToString("yyyy/MM/dd HH:mm")</MudTd>
+                <MudTd>@rev.Comment</MudTd>
+                <MudTd>
+                    <div class="d-flex gap-1">
+                        @if (_revisions.IndexOf(rev) < _revisions.Count - 1)
+                        {
+                            var older = _revisions[_revisions.IndexOf(rev) + 1];
+                            <MudButton Size="Size.Small" Variant="Variant.Outlined"
+                                       StartIcon="@Icons.Material.Filled.Compare"
+                                       OnClick="() => ShowDiff(older, rev)">差分</MudButton>
+                        }
+                        <MudButton Size="Size.Small" OnClick="() => RollbackTo(rev.Id)">
+                            ロールバック
+                        </MudButton>
+                    </div>
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+    </DialogContent>
+</MudDialog>
+
+@* ── 新規インラインコメントダイアログ ─────────────────── *@
+<MudDialog @bind-IsVisible="_showNewAnnotation"
+           Options="@(new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true })">
+    <TitleContent><MudText Typo="Typo.h6">コメントを追加</MudText></TitleContent>
+    <DialogContent>
+        <MudPaper Elevation="0" Class="pa-2 mb-3 rounded"
+                  Style="background:var(--mud-palette-background-grey);border-left:3px solid #F59E0B;font-size:12px;font-style:italic">
+            "@(_selectedText.Length <= 100 ? _selectedText : _selectedText[..100] + "…")"
+        </MudPaper>
+        <MudTextField @bind-Value="_newAnnotationBody"
+                      Label="コメント" Variant="Variant.Outlined" Lines="3"
+                      FullWidth="true" AutoFocus="true"
+                      Placeholder="選択テキストについてコメントを入力..." />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="() => _showNewAnnotation = false">キャンセル</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                   Disabled="@string.IsNullOrWhiteSpace(_newAnnotationBody)"
+                   OnClick="SubmitNewAnnotation">コメントを追加</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [Parameter] public int? PageId { get; set; }
+
+    // ── 状態 ─────────────────────────────────────────────────
+    private bool    _loading              = true;
+    private bool    _editMode             = false;
+    private bool    _saving               = false;
+    private bool    _showRevisions        = false;
+    private bool    _showAnnotations      = false;
+    private bool    _showAddAnnotation    = false;
+    private bool    _showNewAnnotation    = false;
+    private string  _editTitle            = string.Empty;
+    private string  _renderedHtml         = string.Empty;
+    private string  _currentUserSid       = string.Empty;
+    private string? _appliedTemplateName;
+    private int     _openAnnotationCount  = 0;
+
+    // エディタへの初期コンテンツ
+    private string? _initialEditorJson;
+    private string? _initialEditorMarkdown;
+    // エディタからの最新 JSON（OnChange で更新）
+    private string  _currentJson          = string.Empty;
+
+    // テキスト選択・注釈
+    private int    _selectionStart    = 0;
+    private int    _selectionEnd      = 0;
+    private string _selectedText      = string.Empty;
+    private double _popoverTop        = 0;
+    private double _popoverLeft       = 0;
+    private string _newAnnotationBody = string.Empty;
+
+    // データ
+    private WinConflu.Models.Page?            _page;
+    private List<WinConflu.Models.Page>       _childPages   = [];
+    private List<WinConflu.Models.Issue>      _linkedIssues = [];
+    private List<WinConflu.Models.Attachment> _attachments  = [];
+    private List<WinConflu.Models.Revision>   _revisions    = [];
+    private List<BreadcrumbItem>              _breadcrumbs  = [];
+
+    // 子コンポーネント参照
+    private TiptapEditorComponent? _editor;
+    private InlineAnnotationPanel? _annotationPanel;
+
+    // ── ライフサイクル ────────────────────────────────────────
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthState.GetAuthenticationStateAsync();
+        _currentUserSid = auth.User.Identity?.Name ?? string.Empty;
+
+        if (PageId.HasValue)
+        {
+            await LoadPageAsync(PageId.Value);
+            _openAnnotationCount = (await AnnotationSvc.GetByPageAsync(PageId.Value)).Count;
+        }
+        else
+        {
+            _editMode = true;
+            _loading  = false;
+            _breadcrumbs = [new("Wiki", "/wiki"), new("新しいページ", null, true)];
+        }
+    }
+
+    // ── ページ読み込み ────────────────────────────────────────
+
+    private async Task LoadPageAsync(int id)
+    {
+        _loading = true;
+        try
+        {
+            _page        = await WikiSvc.GetPageAsync(id);
+            _childPages  = await WikiSvc.GetChildrenAsync(id);
+            _attachments = await AttachSvc.GetForEntityAsync("Page", id);
+
+            if (_page is not null)
+            {
+                _linkedIssues = _page.LinkedIssues.ToList();
+                _renderedHtml = RenderPageContent(_page);
+
+                var anc = await WikiSvc.GetBreadcrumbAsync(id);
+                _breadcrumbs =
+                [
+                    new("Wiki", "/wiki"),
+                    .. anc.Select(a => new BreadcrumbItem(a.Title, $"/wiki/{a.Id}")),
+                    new(_page.Title, null, true)
+                ];
+            }
+        }
+        finally { _loading = false; }
+    }
+
+    /// <summary>ページのコンテンツ形式に応じてレンダリング</summary>
+    private string RenderPageContent(WinConflu.Models.Page page)
+    {
+        if (page.ContentFormat == "json")
+        {
+            // ProseMirror JSON → HTML
+            var toc  = string.Empty; // ToC は JSON から別途生成（後続 Phase で実装）
+            var body = ProseMirrorSvc.ToHtml(page.Content);
+            return body;
+        }
+        else
+        {
+            // 既存 Markdown → HTML（Markdig）
+            var toc  = MarkdownSvc.GenerateToc(page.Content);
+            var body = MarkdownSvc.Render(page.Content);
+            return string.IsNullOrEmpty(toc) ? body : toc + body;
+        }
+    }
+
+    // ── 編集モード制御 ────────────────────────────────────────
+
+    private void EnableEdit()
+    {
+        _editTitle = _page?.Title ?? string.Empty;
+
+        if (_page?.ContentFormat == "json")
+        {
+            // JSON コンテンツ → Tiptap にそのまま渡す
+            _initialEditorJson     = _page.Content;
+            _initialEditorMarkdown = null;
+        }
+        else
+        {
+            // Markdown コンテンツ → HTML 変換して Tiptap に読み込ませる
+            _initialEditorJson     = null;
+            _initialEditorMarkdown = _page is not null
+                ? MarkdownSvc.Render(_page.Content)  // Markdig → HTML → Tiptap がパース
+                : string.Empty;
+        }
+
+        _currentJson = _page?.Content ?? string.Empty;
+        _editMode    = true;
+    }
+
+    private void CancelEdit()
+    {
+        _editMode = false;
+        _initialEditorJson     = null;
+        _initialEditorMarkdown = null;
+        if (PageId is null) Nav.NavigateTo("/wiki");
+    }
+
+    /// <summary>Tiptap エディタから JSON が変更されるたびに呼ばれる</summary>
+    private void OnEditorChange(string json)
+    {
+        _currentJson = json;
+    }
+
+    // ── 保存 ─────────────────────────────────────────────────
+
+    private async Task SavePage()
+    {
+        if (string.IsNullOrWhiteSpace(_editTitle))
+        {
+            Snackbar.Add("タイトルを入力してください。", Severity.Warning);
+            return;
+        }
+
+        _saving = true;
+        try
+        {
+            // JS から最新 JSON を取得（OnChange が間に合わない場合の保険）
+            if (_editor is not null)
+                _currentJson = await _editor.GetJsonAsync();
+
+            // 空チェック
+            if (string.IsNullOrWhiteSpace(_currentJson) || _currentJson == "{}")
+            {
+                Snackbar.Add("コンテンツを入力してください。", Severity.Warning);
+                return;
+            }
+
+            const string format = "json";
+
+            if (PageId.HasValue)
+            {
+                var req = new UpdatePageRequest(
+                    _editTitle, _currentJson, format,
+                    null, null, null);
+                _page = await WikiSvc.UpdatePageAsync(PageId.Value, req, _currentUserSid);
+
+                // アノテーションのアンカー再計算（プレーンテキストで）
+                var plainText = ProseMirrorSvc.ToPlainText(_currentJson);
+                await AnnotationSvc.RecalculateAnchorsAsync(PageId.Value, plainText);
+
+                Snackbar.Add("ページを保存しました。", Severity.Success);
+            }
+            else
+            {
+                var req = new CreatePageRequest(
+                    _editTitle, _currentJson, format,
+                    null, null, null);
+                _page = await WikiSvc.CreatePageAsync(req, _currentUserSid);
+                Nav.NavigateTo($"/wiki/{_page.Id}", replace: true);
+                return;
+            }
+
+            _renderedHtml = RenderPageContent(_page);
+            _editMode     = false;
+            _initialEditorJson     = null;
+            _initialEditorMarkdown = null;
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"保存に失敗しました: {ex.Message}", Severity.Error);
+        }
+        finally { _saving = false; }
+    }
+
+    // ── テンプレート ─────────────────────────────────────────
+
+    private async Task OpenTemplatePicker()
+    {
+        var dlg    = await Dialog.ShowAsync<TemplatePickerDialog>("テンプレート選択",
+                         new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+        var result = await dlg.Result;
+        if (!result.Canceled && result.Data is TemplatePickerResult picked)
+        {
+            _appliedTemplateName = picked.TemplateName;
+            if (string.IsNullOrEmpty(_editTitle) && picked.TemplateName != null)
+                _editTitle = picked.TemplateName;
+
+            if (_editor is not null && !string.IsNullOrEmpty(picked.Content))
+            {
+                // Markdown コンテンツを HTML に変換してエディタに流し込む
+                var html = MarkdownSvc.Render(picked.Content);
+                await _editor.SetMarkdownAsync(html);
+            }
+        }
+    }
+
+    private void ClearTemplate()
+    {
+        _appliedTemplateName = null;
+        if (_editor is not null) _ = _editor.SetJsonAsync("{\"type\":\"doc\",\"content\":[]}");
+    }
+
+    // ── インラインコメント ────────────────────────────────────
+
+    private void ToggleAnnotations()
+    {
+        _showAnnotations   = !_showAnnotations;
+        _showAddAnnotation = false;
+    }
+
+    private async Task OnTextSelected()
+    {
+        if (_editMode) return;
+        var sel = await JS.InvokeAsync<TextSelectionInfo?>("wcn.getTextSelection", "wcn-page-body");
+        if (sel is null || sel.Text.Length < 2) { _showAddAnnotation = false; return; }
+        _selectedText = sel.Text; _selectionStart = sel.Start; _selectionEnd = sel.End;
+        _popoverTop   = sel.BoundingTop + 28; _popoverLeft = sel.BoundingLeft;
+        _showAddAnnotation = true;
+    }
+
+    private void OpenNewAnnotationDialog()
+    {
+        _newAnnotationBody = string.Empty;
+        _showNewAnnotation = true; _showAddAnnotation = false; _showAnnotations = true;
+    }
+
+    private async Task SubmitNewAnnotation()
+    {
+        if (string.IsNullOrWhiteSpace(_newAnnotationBody) || !PageId.HasValue) return;
+        try
+        {
+            await AnnotationSvc.CreateAsync(new CreateAnnotationRequest(
+                PageId.Value, _selectionStart, _selectionEnd,
+                _selectedText, _newAnnotationBody), _currentUserSid);
+            _showNewAnnotation = false; _openAnnotationCount++;
+            if (_annotationPanel != null) await _annotationPanel.LoadAsync();
+            Snackbar.Add("コメントを追加しました。", Severity.Success);
+        }
+        catch (Exception ex) { Snackbar.Add($"失敗: {ex.Message}", Severity.Error); }
+    }
+
+    // ── 履歴・差分・ロールバック ──────────────────────────────
+
+    private async Task ShowRevisions()
+    {
+        if (PageId.HasValue) _revisions = await WikiSvc.GetRevisionsAsync(PageId.Value);
+        _showRevisions = true;
+    }
+
+    private async Task ShowDiff(WinConflu.Models.Revision oldRev, WinConflu.Models.Revision newRev)
+    {
+        // 比較用に両リビジョンをプレーンテキストに正規化（形式混在対応）
+        var oldText = oldRev.ContentFormat == "json"
+            ? ProseMirrorSvc.ToPlainText(oldRev.Content)
+            : oldRev.Content;
+        var newText = newRev.ContentFormat == "json"
+            ? ProseMirrorSvc.ToPlainText(newRev.Content)
+            : newRev.Content;
+
+        // 差分表示用に正規化済みリビジョンを生成
+        var normalizedOld = new WinConflu.Models.Revision
+        {
+            Id       = oldRev.Id,
+            Version  = oldRev.Version,
+            Content  = oldText,
+            ContentFormat = "markdown",
+            AuthorSid = oldRev.AuthorSid,
+            Comment  = oldRev.Comment,
+            CreatedAt = oldRev.CreatedAt
+        };
+        var normalizedNew = new WinConflu.Models.Revision
+        {
+            Id       = newRev.Id,
+            Version  = newRev.Version,
+            Content  = newText,
+            ContentFormat = "markdown",
+            AuthorSid = newRev.AuthorSid,
+            Comment  = newRev.Comment,
+            CreatedAt = newRev.CreatedAt
+        };
+
+        var parameters = new DialogParameters
+        {
+            [nameof(RevisionDiffDialog.OldRevision)] = normalizedOld,
+            [nameof(RevisionDiffDialog.NewRevision)] = normalizedNew
+        };
+        await Dialog.ShowAsync<RevisionDiffDialog>(
+            $"差分: v{oldRev.Version} → v{newRev.Version}",
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.ExtraLarge, FullWidth = true });
+    }
+
+    private async Task RollbackTo(int revisionId)
+    {
+        if (!PageId.HasValue) return;
+        _page = await WikiSvc.RollbackAsync(PageId.Value, revisionId, _currentUserSid);
+        _renderedHtml  = RenderPageContent(_page);
+        _showRevisions = false;
+        Snackbar.Add("ロールバックしました。", Severity.Success);
+    }
+
+    // ── Teams 共有 ────────────────────────────────────────────
+
+    private void ShareToTeams()
+        => Nav.NavigateTo(
+            $"https://teams.microsoft.com/share?href={Uri.EscapeDataString(Nav.Uri)}",
+            forceLoad: true);
+}
+
+public record TextSelectionInfo(
+    string Text, int Start, int End,
+    double BoundingTop, double BoundingLeft);

@@ -1,0 +1,231 @@
+/* ============================================================
+   WinConflu.NET — wcn-editor.css
+   Tiptap エディタ本体・ツールバー・ポップアップのスタイル
+   ============================================================ */
+
+/* ── エディタコンテナ ─────────────────────────────────────── */
+.wcn-editor-wrapper {
+  border: 1px solid var(--mud-palette-divider);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--mud-palette-surface);
+  display: flex;
+  flex-direction: column;
+}
+
+.wcn-editor-wrapper:focus-within {
+  border-color: var(--mud-palette-primary);
+  box-shadow: 0 0 0 2px rgba(24, 95, 165, 0.12);
+}
+
+/* ── Tiptap コンテンツ領域 ────────────────────────────────── */
+.wcn-tiptap-content {
+  padding: 16px 20px;
+  min-height: 400px;
+  max-height: 70vh;
+  overflow-y: auto;
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--mud-palette-text-primary);
+  outline: none;
+}
+
+.wcn-tiptap-content .ProseMirror {
+  outline: none;
+  min-height: 360px;
+}
+
+/* プレースホルダー */
+.wcn-tiptap-content .ProseMirror p.is-empty:first-child::before {
+  content:  attr(data-placeholder);
+  color:    var(--mud-palette-text-disabled);
+  pointer-events: none;
+  float:    left;
+  height:   0;
+}
+
+/* ── 見出し ──────────────────────────────────────────────── */
+.wcn-tiptap-content h1 { font-size: 22px; font-weight: 500; margin: 1.6rem 0 0.6rem; border-bottom: 1px solid var(--mud-palette-divider); padding-bottom: 6px; }
+.wcn-tiptap-content h2 { font-size: 18px; font-weight: 500; margin: 1.4rem 0 0.5rem; }
+.wcn-tiptap-content h3 { font-size: 15px; font-weight: 500; margin: 1.2rem 0 0.4rem; }
+.wcn-tiptap-content p  { margin: 0 0 0.8rem; }
+
+/* ── リスト ──────────────────────────────────────────────── */
+.wcn-tiptap-content ul,
+.wcn-tiptap-content ol  { padding-left: 1.5rem; margin: 0.4rem 0 0.8rem; }
+.wcn-tiptap-content li  > p { margin: 0; }
+
+/* タスクリスト */
+.wcn-tiptap-content ul[data-type="taskList"] { list-style: none; padding-left: 0.4rem; }
+.wcn-tiptap-content li[data-type="taskItem"] { display: flex; gap: 8px; align-items: flex-start; }
+.wcn-tiptap-content li[data-type="taskItem"] > label { flex-shrink: 0; margin-top: 3px; }
+.wcn-tiptap-content li[data-type="taskItem"][data-checked="true"] > div { text-decoration: line-through; color: var(--mud-palette-text-secondary); }
+
+/* ── コード ──────────────────────────────────────────────── */
+.wcn-tiptap-content code { font-family: monospace; font-size: 12px; background: rgba(0,0,0,0.06); padding: 1px 5px; border-radius: 4px; }
+.wcn-tiptap-content pre  { background: #1e1e1e; color: #d4d4d4; padding: 14px 16px; border-radius: 8px; margin: 0.8rem 0; overflow-x: auto; font-size: 12px; line-height: 1.6; }
+.wcn-tiptap-content pre code { background: transparent; color: inherit; padding: 0; font-size: inherit; }
+
+/* ── テーブル ────────────────────────────────────────────── */
+.wcn-tiptap-content table { width: 100%; border-collapse: collapse; margin: 1rem 0; table-layout: fixed; }
+.wcn-tiptap-content th, .wcn-tiptap-content td { border: 1px solid var(--mud-palette-divider); padding: 8px 12px; text-align: left; vertical-align: top; min-width: 60px; position: relative; }
+.wcn-tiptap-content th { background: rgba(0,0,0,0.04); font-weight: 500; }
+.wcn-tiptap-content .selectedCell::after { background: rgba(24, 95, 165, 0.12); content: ''; left: 0; right: 0; top: 0; bottom: 0; pointer-events: none; position: absolute; }
+/* 列リサイズハンドル */
+.wcn-tiptap-content .column-resize-handle { background: #185FA5; bottom: -2px; pointer-events: none; position: absolute; right: -2px; top: 0; width: 4px; }
+.wcn-tiptap-content .resize-cursor { cursor: col-resize; }
+
+/* ── 引用・リンク ────────────────────────────────────────── */
+.wcn-tiptap-content blockquote { border-left: 4px solid #B5D4F4; margin: 1rem 0; padding: 0.5rem 1rem; background: #E6F1FB; border-radius: 0 6px 6px 0; }
+.wcn-tiptap-content a { color: #185FA5; text-decoration: underline; cursor: pointer; }
+
+/* ── InfoBox ─────────────────────────────────────────────── */
+.wcn-infobox { display: flex; gap: 12px; padding: 12px 16px; border-radius: 8px; margin: 1rem 0; }
+.wcn-infobox--info    { background: #E6F1FB; border-left: 4px solid #185FA5; }
+.wcn-infobox--warning { background: #FAEEDA; border-left: 4px solid #BA7517; }
+.wcn-infobox--tip     { background: #EAF3DE; border-left: 4px solid #3B6D11; }
+.wcn-infobox--danger  { background: #FCEBEB; border-left: 4px solid #A32D2D; }
+.wcn-infobox__icon  { font-size: 18px; flex-shrink: 0; margin-top: 2px; }
+.wcn-infobox__body  { flex: 1; }
+
+/* ── Issue Embed ─────────────────────────────────────────── */
+.wcn-issue-embed { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 4px; font-size: 13px; border: 1px solid; cursor: pointer; user-select: none; vertical-align: middle; }
+.wcn-issue-embed__key   { font-family: monospace; font-weight: 500; }
+.wcn-issue-embed__title { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wcn-issue-embed__status { font-size: 11px; padding: 1px 5px; border-radius: 3px; }
+
+/* ── @メンション ─────────────────────────────────────────── */
+.wcn-mention { background: #E6F1FB; color: #0C447C; padding: 0 4px; border-radius: 4px; font-weight: 500; cursor: pointer; }
+
+/* ── バブルメニュー ───────────────────────────────────────── */
+.wcn-bubble-menu {
+  display: none;
+  position: absolute;
+  z-index: 50;
+  background: var(--mud-palette-surface);
+  border: 1px solid var(--mud-palette-divider);
+  border-radius: 8px;
+  padding: 4px;
+  gap: 2px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+  flex-wrap: nowrap;
+}
+
+.wcn-bubble-btn {
+  padding: 4px 8px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--mud-palette-text-secondary);
+  min-width: 28px;
+  transition: background 0.1s, color 0.1s;
+}
+.wcn-bubble-btn:hover  { background: rgba(0,0,0,0.06); color: var(--mud-palette-text-primary); }
+.wcn-bubble-btn.active { background: #E6F1FB; color: #0C447C; }
+
+/* ── スラッシュコマンドパレット ──────────────────────────── */
+.wcn-slash-palette {
+  width: 280px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--mud-palette-surface);
+  border: 1px solid var(--mud-palette-divider);
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+}
+
+.wcn-slash-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s;
+}
+.wcn-slash-item:hover,
+.wcn-slash-item.selected { background: #E6F1FB; }
+.wcn-slash-icon  { width: 28px; height: 28px; border-radius: 6px; background: rgba(0,0,0,0.06); display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0; }
+.wcn-slash-info  { display: flex; flex-direction: column; }
+.wcn-slash-title { font-size: 13px; font-weight: 500; color: var(--mud-palette-text-primary); }
+.wcn-slash-desc  { font-size: 11px; color: var(--mud-palette-text-secondary); }
+
+/* ── @メンションポップアップ ─────────────────────────────── */
+.wcn-mention-popup {
+  min-width: 220px;
+  background: var(--mud-palette-surface);
+  border: 1px solid var(--mud-palette-divider);
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+}
+
+.wcn-mention-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+}
+.wcn-mention-item:hover { background: #E6F1FB; }
+.wcn-mention-photo  { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
+.wcn-mention-avatar { width: 24px; height: 24px; border-radius: 50%; background: #185FA5; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 500; flex-shrink: 0; }
+.wcn-mention-name   { font-size: 13px; font-weight: 500; }
+.wcn-mention-dept   { font-size: 11px; color: var(--mud-palette-text-secondary); margin-left: auto; }
+
+/* ── ツールバー ──────────────────────────────────────────── */
+.wcn-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--mud-palette-divider);
+  background: var(--mud-palette-background);
+}
+.wcn-toolbar-btn {
+  padding: 4px 8px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--mud-palette-text-secondary);
+  min-width: 28px;
+  transition: background 0.1s;
+}
+.wcn-toolbar-btn:hover  { background: rgba(0,0,0,0.06); }
+.wcn-toolbar-btn.active { background: #E6F1FB; color: #0C447C; }
+.wcn-toolbar-sep { width: 1px; background: var(--mud-palette-divider); margin: 2px 4px; align-self: stretch; }
+
+/* ── 文字数カウンタ ───────────────────────────────────────── */
+.wcn-char-count {
+  font-size: 11px;
+  color: var(--mud-palette-text-disabled);
+  padding: 4px 12px;
+  text-align: right;
+  border-top: 1px solid var(--mud-palette-divider);
+}
+
+/* ── tippy テーマ ────────────────────────────────────────── */
+.tippy-box[data-theme~='wcn-slash'],
+.tippy-box[data-theme~='wcn-mention'] {
+  background: transparent;
+  box-shadow: none;
+}
+.tippy-box[data-theme~='wcn-slash'] > .tippy-content,
+.tippy-box[data-theme~='wcn-mention'] > .tippy-content {
+  padding: 0;
+}

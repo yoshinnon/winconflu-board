@@ -1,0 +1,23 @@
+@* WinConflu.NET — Routes.razor *@
+<Router AppAssembly="typeof(Program).Assembly">
+    <Found Context="routeData">
+        <AuthorizeRouteView RouteData="routeData" DefaultLayout="typeof(MainLayout)">
+            <NotAuthorized>
+                <MudText Typo="Typo.h6" Class="pa-8">
+                    アクセスが拒否されました。Windows 認証でサインインしてください。
+                </MudText>
+            </NotAuthorized>
+        </AuthorizeRouteView>
+        <FocusOnNavigate RouteData="routeData" Selector="h1" />
+    </Found>
+    <NotFound>
+        <PageTitle>ページが見つかりません</PageTitle>
+        <LayoutView Layout="typeof(MainLayout)">
+            <MudContainer Class="pa-8">
+                <MudText Typo="Typo.h4" Class="mb-4">404 — ページが見つかりません</MudText>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                           Href="/wiki">Wiki トップへ戻る</MudButton>
+            </MudContainer>
+        </LayoutView>
+    </NotFound>
+</Router>

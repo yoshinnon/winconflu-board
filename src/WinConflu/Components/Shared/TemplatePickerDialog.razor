@@ -1,0 +1,202 @@
+@* WinConflu.NET — TemplatePickerDialog.razor
+   ページ新規作成時に表示するテンプレート選択ダイアログ *@
+@inject ITemplateService TemplateSvc
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center gap-2">
+            <MudIcon Icon="@Icons.Material.Filled.ContentCopy" Color="Color.Primary" />
+            <MudText Typo="Typo.h6">テンプレートを選択</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+
+        @* カテゴリフィルタ *@
+        <div class="d-flex gap-2 flex-wrap mb-3">
+            <MudChip Color="@(_selectedCategory == null ? Color.Primary : Color.Default)"
+                     Size="Size.Small" OnClick="() => SelectCategory(null)">
+                すべて
+            </MudChip>
+            @foreach (var cat in _categories)
+            {
+                <MudChip Color="@(_selectedCategory == cat ? Color.Primary : Color.Default)"
+                         Size="Size.Small" OnClick="() => SelectCategory(cat)">
+                    @cat
+                </MudChip>
+            }
+        </div>
+
+        @* テンプレート一覧 *@
+        @if (_loading)
+        {
+            <MudProgressLinear Indeterminate="true" />
+        }
+        else
+        {
+            <MudGrid Spacing="2">
+                @* 空白ページ（テンプレートなし） *@
+                <MudItem xs="6" sm="4">
+                    <MudPaper Elevation="0"
+                              Class="pa-3 cursor-pointer rounded"
+                              Style="@(_selected == null ? SelectedStyle : DefaultCardStyle)"
+                              @onclick="() => _selected = null">
+                        <div class="d-flex flex-column align-center gap-1">
+                            <MudIcon Icon="@Icons.Material.Outlined.AddBox"
+                                     Size="Size.Large" Color="Color.Default" />
+                            <MudText Typo="Typo.body2" Style="font-weight:500;text-align:center">
+                                空白ページ
+                            </MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary"
+                                     Style="text-align:center">
+                                テンプレートなし
+                            </MudText>
+                        </div>
+                    </MudPaper>
+                </MudItem>
+
+                @foreach (var tmpl in _filtered)
+                {
+                    <MudItem xs="6" sm="4">
+                        <MudPaper Elevation="0"
+                                  Class="pa-3 cursor-pointer rounded"
+                                  Style="@(_selected?.Id == tmpl.Id ? SelectedStyle : DefaultCardStyle)"
+                                  @onclick="() => SelectTemplate(tmpl)">
+                            <div class="d-flex flex-column align-center gap-1">
+                                <MudIcon Icon="@tmpl.IconName"
+                                         Size="Size.Large"
+                                         Color="@(_selected?.Id == tmpl.Id ? Color.Primary : Color.Default)" />
+                                <MudText Typo="Typo.body2"
+                                         Style="font-weight:500;text-align:center">
+                                    @tmpl.Name
+                                </MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary"
+                                         Style="text-align:center;line-height:1.4">
+                                    @tmpl.Description
+                                </MudText>
+                                @if (tmpl.UsageCount > 0)
+                                {
+                                    <MudChip Size="Size.Small" Color="Color.Default"
+                                             Icon="@Icons.Material.Filled.TrendingUp">
+                                        @tmpl.UsageCount 回使用
+                                    </MudChip>
+                                }
+                            </div>
+                        </MudPaper>
+                    </MudItem>
+                }
+            </MudGrid>
+        }
+
+        @* 変数入力フォーム（テンプレート選択後に展開） *@
+        @if (_selected != null && _variables.Count > 0)
+        {
+            <MudDivider Class="my-4" />
+            <MudText Typo="Typo.subtitle2" Class="mb-3">テンプレート変数の入力</MudText>
+            <MudGrid Spacing="2">
+                @foreach (var v in _variables)
+                {
+                    <MudItem xs="12" sm="6">
+                        <MudTextField @bind-Value="_variableValues[v.Key]"
+                                      Label="@v.Label"
+                                      Placeholder="@v.DefaultValue"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense" />
+                    </MudItem>
+                }
+            </MudGrid>
+        }
+
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">キャンセル</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.Check"
+                   OnClick="Apply">
+            @(_selected == null ? "空白ページで作成" : $"{_selected.Name} を使用")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = null!;
+
+    private bool                    _loading          = true;
+    private List<PageTemplate>      _templates        = [];
+    private List<PageTemplate>      _filtered         = [];
+    private List<string>            _categories       = [];
+    private PageTemplate?           _selected;
+    private string?                 _selectedCategory;
+    private List<TemplateVariable>  _variables        = [];
+    private Dictionary<string, string> _variableValues = [];
+
+    private const string SelectedStyle    = "border:2px solid var(--mud-palette-primary);background:var(--mud-palette-primary-lighten);";
+    private const string DefaultCardStyle = "border:0.5px solid var(--mud-palette-divider);";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _templates   = await TemplateSvc.GetAllAsync();
+        _categories  = await TemplateSvc.GetCategoriesAsync();
+        _filtered    = _templates;
+        _loading     = false;
+    }
+
+    private void SelectCategory(string? cat)
+    {
+        _selectedCategory = cat;
+        _filtered = cat == null
+            ? _templates
+            : _templates.Where(t => t.Category == cat).ToList();
+    }
+
+    private void SelectTemplate(PageTemplate tmpl)
+    {
+        _selected = tmpl;
+
+        // VariablesJson をパースして変数フォームを展開
+        try
+        {
+            _variables = System.Text.Json.JsonSerializer.Deserialize<List<TemplateVariable>>(
+                             tmpl.VariablesJson,
+                             new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                         ?? [];
+        }
+        catch { _variables = []; }
+
+        // デフォルト値をセット
+        _variableValues = _variables.ToDictionary(
+            v => v.Key,
+            v => v.DefaultValue.StartsWith("{{") ? string.Empty : v.DefaultValue);
+    }
+
+    private async Task Apply()
+    {
+        string? renderedContent = null;
+
+        if (_selected != null)
+        {
+            try
+            {
+                // 未入力変数はデフォルト値で補完
+                foreach (var v in _variables.Where(v => !_variableValues.ContainsKey(v.Key)))
+                    _variableValues[v.Key] = v.DefaultValue;
+
+                renderedContent = await TemplateSvc.RenderAsync(_selected.Id, _variableValues);
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"テンプレート展開に失敗: {ex.Message}", Severity.Error);
+                return;
+            }
+        }
+
+        MudDialog.Close(DialogResult.Ok(new TemplatePickerResult(
+            TemplateName: _selected?.Name,
+            Content:      renderedContent ?? string.Empty)));
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}
+
+/// <summary>TemplatePickerDialog の戻り値</summary>
+public record TemplatePickerResult(string? TemplateName, string Content);
