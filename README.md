@@ -3,6 +3,13 @@
 Azure / Windows 環境に特化したゼロコンフィグ・ナレッジ＆タスク管理プラットフォーム。  
 Confluence + Jira の主要機能を .NET 10 / Blazor Server / Tiptap でフルスタック実装。
 
+Confluence + Jira はドキュメントデータが増えまくると、とてつもなく遅いシステムに成り下がりますが、Azure + Windows環境に特化させることで軽量化を図ったシステムです。
+おまけにActive Directoryと連携することで、新規ユーザ追加時の管理者・ユーザの手間が減ります。
+
+### 編集機能の懸念 
+ConfluenceのWYSIWIG編集画面に似せるため、無理やりTiptap（Typescript）を編集画面として実装しています。
+WYSIWIGにこだわらずMarkdown形式での編集画面でよければ、Typescriptの部分が丸ごとC#で統一・実装できるため、もっとシンプルになります。
+
 ---
 
 ## 機能概要
